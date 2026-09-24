@@ -54,3 +54,22 @@ pip install -r requirements.txt
 
 python phase0/fetch_samples.py
 ```
+
+## Frontend preview
+
+A minimal React + Leaflet dashboard that shows live NOAA stations and
+recent USGS earthquakes on a map. It's a seed for the Phase 7 dashboard —
+today it hits a local Flask API that fetches live data directly; later
+phases swap the API's data source (Athena, etc.) without changing the
+frontend.
+
+```bash
+# terminal 1 — backend API on :5001
+source .venv/bin/activate
+python backend/app.py
+
+# terminal 2 — frontend on :5173
+cd frontend
+npm install
+npm run dev
+```

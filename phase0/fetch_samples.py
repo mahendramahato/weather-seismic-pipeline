@@ -12,7 +12,6 @@ import json
 import requests
 
 NOAA_STATION_ID = "KBOI"  # Boise, ID
-NOAA_URL = f"https://api.weather.gov/stations/{NOAA_STATION_ID}/observations/latest"
 NOAA_HEADERS = {
     "User-Agent": "weather-seismic-pipeline (mahendramahato33@gmail.com)"
 }
@@ -22,8 +21,9 @@ USGS_URL = (
 )
 
 
-def fetch_weather() -> dict:
-    response = requests.get(NOAA_URL, headers=NOAA_HEADERS, timeout=10)
+def fetch_weather(station_id: str = NOAA_STATION_ID) -> dict:
+    url = f"https://api.weather.gov/stations/{station_id}/observations/latest"
+    response = requests.get(url, headers=NOAA_HEADERS, timeout=10)
     response.raise_for_status()
     return response.json()
 
