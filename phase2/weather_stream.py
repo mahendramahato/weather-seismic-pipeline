@@ -1,5 +1,5 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json
+from pyspark.sql.functions import col, from_json, to_date
 from pyspark.sql.types import (
     DoubleType,
     StringType,
@@ -25,9 +25,24 @@ WEATHER_SCHEMA = StructType([
     StructField("ingested_at", TimestampType())
 ])
 
+# --- Output locations ---
+# /opt/data inside the container is the project's data/ folder on the Mac.
+# LAKE_PATH holds the Parquet files; CHECKPOINT_PATH is where Spark records
+# which Kafka offsets it has already written, so a restart continues from there.
+LAKE_PATH = "/opt/data/lake/weather"
+CHECKPOINT_PATH = "/opt/data/checkpoints/weather"
+
+
 # --- Spark session ---
 # Entry point to Spark. WARN hides the noisy INFO logs.
-spark = SparkSession.builder.appName("weather-stream").getOrCreate()
+# UTC timezone so to_date() assigns every reading to the
+# same calendar day no matter where the job runs.
+spark = (
+    SparkSession.builder
+    .appName("weather-stream")
+    .config("spark.sql.session.timeZone", "UTC")
+    .getOrCreate()
+)
 spark.sparkContext.setLogLevel("WARN")
 
 # --- Read (ASK + READ) ---
@@ -56,17 +71,27 @@ parsed = (
 # A real weather record always has a station_id; NULL means junk.
 valid = parsed.filter(col("station_id").isNotNull())
 
-valid.printSchema()
+# --- Add partition column ---
+# Derive the calendar day from event time (observed_at), not ingest time,
+# so each reading lands in the day it was actually measured.
+with_date = valid.withColumn("date", to_date(col("observed_at")))
 
-# --- Output ---
-# Print each micro-batch to the terminal every 10 seconds (Parquet in Step 2.4).
-# Nothing runs until start(); awaitTermination() keeps the script alive.
+# --- Write (WRITE + RECORD) ---
+# Every minute, append the new rows as Parquet files under LAKE_PATH,
+# one folder per day (date=YYYY-MM-DD). After each batch, Spark saves the
+# Kafka offsets it finished to CHECKPOINT_PATH.
+# append = only write new rows; never rewrite files that already exist.
 query = (
-    valid.writeStream
-    .format("console")
-    .option("truncate", False)
-    .trigger(processingTime="10 seconds")
+    with_date.writeStream
+    .format("parquet")
+    .option("path", LAKE_PATH)
+    .option("checkpointLocation", CHECKPOINT_PATH)
+    .partitionBy("date")
+    .outputMode("append")
+    .trigger(processingTime="1 minute")
     .start()
 )
 
+# Keeps the script running; without it, the script would exit and stop the stream.
 query.awaitTermination()
+
