@@ -71,10 +71,23 @@ parsed = (
 # A real weather record always has a station_id; NULL means junk.
 valid = parsed.filter(col("station_id").isNotNull())
 
+# --- Remove duplicates (CLEAN) ---
+# Same station + same observed_at = the same measurement, even if the producer
+# sent it twice (at-least-once delivery). Spark remembers readings it has seen
+# so it can recognise repeats; the watermark caps that memory at 3 hours behind
+# the newest observed_at, so state doesn't grow forever. Readings older than
+# the watermark are dropped as too late.
+deduped = (
+    valid
+    .withWatermark("observed_at", "3 hours")
+    .dropDuplicates(["station_id", "observed_at"])
+)
+
+
 # --- Add partition column ---
 # Derive the calendar day from event time (observed_at), not ingest time,
 # so each reading lands in the day it was actually measured.
-with_date = valid.withColumn("date", to_date(col("observed_at")))
+with_date = deduped.withColumn("date", to_date(col("observed_at")))
 
 # --- Write (WRITE + RECORD) ---
 # Every minute, append the new rows as Parquet files under LAKE_PATH,
