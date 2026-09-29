@@ -1,5 +1,5 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, to_date, coalesce
+from pyspark.sql.functions import col, from_json, to_date, coalesce, lit
 from pyspark.sql.types import (
     DoubleType,
     StringType,
@@ -32,6 +32,10 @@ SEISMIC_SCHEMA = StructType([
 LAKE_PATH = "/opt/data/lake/seismic"
 CHECKPOINT_PATH = "/opt/data/checkpoints/seismic"
 
+# --- Anomaly rule ---
+# USGS's own cutoff for "significant" quakes worldwide; smaller quakes happen
+# thousands of times a day and aren't worth flagging.
+SIGNIFICANT_MAGNITUDE = 4.5
 
 # --- Spark session ---
 # Entry point to Spark. WARN hides the noisy INFO logs.
@@ -41,6 +45,7 @@ spark = (
     SparkSession.builder
     .appName("seismic-stream")
     .config("spark.sql.session.timeZone", "UTC")
+    .config("spark.sql.shuffle.partitions", "4")
     .getOrCreate()
 )
 spark.sparkContext.setLogLevel("WARN")
@@ -90,11 +95,19 @@ deduped = (
     .dropDuplicates(["event_id", "updated_at"])
 )
 
+# --- Flag significant quakes (DETECT) ---
+# Stateless rule: each quake is judged on its own magnitude, no history needed.
+# If magnitude is missing, the comparison gives NULL; coalesce turns that
+# into False so the flag is always true or false, never NULL.
+flagged = deduped.withColumn(
+    "is_significant",
+    coalesce(col("magnitude") >= SIGNIFICANT_MAGNITUDE, lit(False))
+)
 
 # --- Add partition column ---
 # Derive the calendar day from event time (event_time), not update or ingest
 # time, so each quake — and all its revisions — lands in the day it happened.
-with_date = deduped.withColumn("date", to_date(col("event_time")))
+with_date = flagged.withColumn("date", to_date(col("event_time")))
 
 # --- Write (WRITE + RECORD) ---
 # Every minute, append the new rows as Parquet files under LAKE_PATH,

@@ -34,13 +34,15 @@ CHECKPOINT_PATH = "/opt/data/checkpoints/weather"
 
 
 # --- Spark session ---
-# Entry point to Spark. WARN hides the noisy INFO logs.
-# UTC timezone so to_date() assigns every reading to the
-# same calendar day no matter where the job runs.
+# Entry point to Spark. UTC timezone so to_date() assigns every reading to the
+# same calendar day no matter where the job runs. shuffle.partitions = 4
+# because the default (200) is sized for big clusters: with our small data it
+# splits each batch into ~200 tiny pieces and writes a tiny file for each.
 spark = (
     SparkSession.builder
     .appName("weather-stream")
     .config("spark.sql.session.timeZone", "UTC")
+    .config("spark.sql.shuffle.partitions", "4")
     .getOrCreate()
 )
 spark.sparkContext.setLogLevel("WARN")
@@ -89,22 +91,38 @@ deduped = (
 # so each reading lands in the day it was actually measured.
 with_date = deduped.withColumn("date", to_date(col("observed_at")))
 
-# --- Write (WRITE + RECORD) ---
-# Every minute, append the new rows as Parquet files under LAKE_PATH,
-# one folder per day (date=YYYY-MM-DD). After each batch, Spark saves the
-# Kafka offsets it finished to CHECKPOINT_PATH.
-# append = only write new rows; never rewrite files that already exist.
+# --- Per-batch processing ---
+# Spark calls this once per micro-batch. batch_df is a normal (non-streaming)
+# DataFrame holding only this batch's new rows; batch_id counts up 0, 1, 2 ...
+# Anything a regular Spark program can do works here - Step 3.3 adds anomaly
+# detection in this function.
+def process_batch(batch_df, batch_id):
+    row_count = batch_df.count()
+    print(f"batch {batch_id}: {row_count} new readings")
+
+    # Spark sometimes runs empty batches (e.g. to move the watermark forward)
+    # skip them so we don't write empty files
+    if row_count == 0:
+        return
+
+    # Append this batch to the lake, one folder per day, same layout as before
+    (
+        batch_df.write
+        .mode("append")
+        .partitionBy("date")
+        .parquet(LAKE_PATH)
+    )
+
+# --- Start the stream (RECORD) ---
+# Every minute, hand the new rows to process_batch. After the function returns, 
+# Spark saves the finished Kafka offsets to CHECKPOINT_PATH
 query = (
     with_date.writeStream
-    .format("parquet")
-    .option("path", LAKE_PATH)
+    .foreachBatch(process_batch)
     .option("checkpointLocation", CHECKPOINT_PATH)
-    .partitionBy("date")
-    .outputMode("append")
     .trigger(processingTime="1 minute")
     .start()
 )
 
-# Keeps the script running; without it, the script would exit and stop the stream.
+# keeps the script running; without it the script would exit and stop the stream
 query.awaitTermination()
-
