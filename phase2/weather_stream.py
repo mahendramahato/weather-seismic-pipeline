@@ -1,3 +1,5 @@
+import os
+
 from datetime import timedelta
 
 from pyspark.errors import AnalysisException
@@ -44,12 +46,15 @@ WEATHER_SCHEMA = StructType([
     StructField("ingested_at", TimestampType())
 ])
 
-# --- Output locations ---
+# --- Topic and output locations ---
+# Defaults are the real pipeline. Tests override them with environment
+# variables (docker exec -e NAME=value ...) to run this exact code against a
+# separate topic, lake and checkpoint, so test data never touches real data.
 # /opt/data inside the container is the project's data/ folder on the Mac.
-# LAKE_PATH holds the Parquet files; CHECKPOINT_PATH is where Spark records
-# which Kafka offsets it has already written, so a restart continues from there.
-LAKE_PATH = "/opt/data/lake/weather"
-CHECKPOINT_PATH = "/opt/data/checkpoints/weather"
+WEATHER_TOPIC = os.environ.get("WEATHER_TOPIC", "weather")
+LAKE_PATH = os.environ.get("LAKE_PATH", "/opt/data/lake/weather")
+CHECKPOINT_PATH = os.environ.get("CHECKPOINT_PATH", "/opt/data/checkpoints/weather")
+
 
 # --- Anomaly rule ---
 # A reading is an anomaly if it's more than Z_THRESHOLD standard deviations
@@ -90,7 +95,7 @@ raw = (
     spark.readStream
     .format("kafka")
     .option("kafka.bootstrap.servers", "kafka:9092")
-    .option("subscribe", "weather")
+    .option("subscribe", WEATHER_TOPIC)
     .option("startingOffsets", "earliest")
     .load()
 )
