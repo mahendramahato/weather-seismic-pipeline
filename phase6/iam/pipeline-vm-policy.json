@@ -1,0 +1,24 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+        "Sid": "ListRawZoneOnly",
+        "Effect": "Allow",
+        "Action": "s3:ListBucket",
+        "Resource": "arn:aws:s3:::weather-seismic-lake-mahendra",
+        "Condition": { "StringLike": { "s3:prefix": ["raw/*"] } }
+        },
+        {
+        "Sid": "UploadToRawZoneOnly",
+        "Effect": "Allow",
+        "Action": "s3:PutObject",
+        "Resource": "arn:aws:s3:::weather-seismic-lake-mahendra/raw/*"
+        },
+        {
+        "Sid": "RunCurateJobOnly",
+        "Effect": "Allow",
+        "Action": ["glue:StartJobRun", "glue:GetJobRun", "glue:GetJobRuns"],
+        "Resource": "arn:aws:glue:us-west-2:011713309527:job/curate-daily"
+        }
+    ]
+}
