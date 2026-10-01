@@ -1,7 +1,10 @@
 services:
+  # --- Message broker ---
   kafka:
     image: apache/kafka:3.8.0
     container_name: kafka
+    # Restart after crashes and server reboots (unless stopped on purpose).
+    restart: unless-stopped
     environment:
       # KRaft mode: this one container acts as both broker and controller,
       # so no separate Zookeeper service is needed.
@@ -10,42 +13,109 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,HOST://0.0.0.0:9094
       # Two advertised listeners: one for other containers on the Docker
-      # network (kafka:9092), one for our Python scripts running on the
-      # host machine (localhost:9094).
+      # network (kafka:9092), one for scripts running on the host (localhost:9094).
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,HOST://localhost:9094
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      # Store messages in the named volume below, so they survive the
+      # container being removed or the image being updated.
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    # 127.0.0.1 = reachable only from this machine, never from the internet.
     ports:
-      - "9094:9094"
+      - "127.0.0.1:9094:9094"
 
+  # --- Web UI for Kafka (reach it through an SSH tunnel) ---
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
+    restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
     depends_on:
       - kafka
 
-  spark:
+  # --- Producer: polls NOAA + USGS every minute, sends to Kafka ---
+  producer:
+    # Built from phase1/Dockerfile instead of pulled from Docker Hub.
+    build: ./phase1
+    container_name: producer
+    restart: unless-stopped
+    environment:
+      # Inside Docker, Kafka is reached at its internal address.
+      BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      - kafka
+
+  # --- Streaming job: weather (parse, dedupe, z-score detection, write lake) ---
+  weather-stream:
     image: apache/spark:4.1.1-python3
-    container_name: spark
+    container_name: weather-stream
+    # Root so Spark can write to the mounted folders (local-dev shortcut).
     user: root
-    command: sleep infinity
+    restart: unless-stopped
     working_dir: /opt/app
+    # The same spark-submit command you used to type by hand. Each job gets its
+    # own ivy sub-folder so the two don't fight over the download cache.
+    command: >
+      /opt/spark/bin/spark-submit
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.1
+      --conf spark.jars.ivy=/opt/ivy/weather
+      --conf spark.log.level=WARN
+      weather_stream.py
     volumes:
       - ./phase2:/opt/app
       - ./data:/opt/data
       - ivy-cache:/opt/ivy
     ports:
-      - "4040:4040"
+      - "127.0.0.1:4040:4040"
     depends_on:
       - kafka
 
+  # --- Streaming job: seismic (parse, dedupe, magnitude flag, write lake) ---
+  seismic-stream:
+    image: apache/spark:4.1.1-python3
+    container_name: seismic-stream
+    user: root
+    restart: unless-stopped
+    working_dir: /opt/app
+    command: >
+      /opt/spark/bin/spark-submit
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.1
+      --conf spark.jars.ivy=/opt/ivy/seismic
+      --conf spark.log.level=WARN
+      seismic_stream.py
+    volumes:
+      - ./phase2:/opt/app
+      - ./data:/opt/data
+      - ivy-cache:/opt/ivy
+    # Each container has its own port 4040 inside; map this one to 4041 outside.
+    ports:
+      - "127.0.0.1:4041:4040"
+    depends_on:
+      - kafka
+
+  # --- Spare Spark container for ad-hoc pyspark shells (docker exec) ---
+  spark:
+    image: apache/spark:4.1.1-python3
+    container_name: spark
+    user: root
+    command: sleep infinity
+    restart: unless-stopped
+    working_dir: /opt/app
+    volumes:
+      - ./phase2:/opt/app
+      - ./data:/opt/data
+      - ivy-cache:/opt/ivy
+
 volumes:
   ivy-cache:
+  # Kafka's message storage; survives container removal.
+  kafka-data:

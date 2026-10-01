@@ -1,3 +1,5 @@
+import os
+import signal
 import json
 import time
 from datetime import datetime, timezone
@@ -6,13 +8,14 @@ import requests
 from confluent_kafka import Producer
 
 # --- Config ---
-# localhost:9094 is Kafka's HOST listener: this script runs on the Mac, outside Docker.
-BOOTSTRAP_SERVERS = "localhost:9094"
+# localhost:9094 when run directly on a machine;
+# inside Docker, the container sees the broker as kafka:9092.
+BOOTSTRAP_SERVERS = os.environ.get("BOOTSTRAP_SERVERS", "localhost:9094")
 WEATHER_TOPIC = "weather"
 SEISMIC_TOPIC = "seismic"
 
 # NOAA requires a User-Agent identifying the app and a contact.
-NOAA_HEADERS = {"User-Agent": "mahendramahato33@gmail.com"}
+NOAA_HEADERS = {"User-Agent": "weather-seismic-pipeline (mahendramahato33@gmail.com)"}
 STATIONS = ["KBOI", "KJFK", "KLAX", "KORD", "KDEN"]
 POLL_INTERVAL_SECONDS = 60  # seconds
 USGS_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson"
@@ -142,10 +145,17 @@ def poll_seismic(producer: Producer, last_quakes: dict[str, str]) -> dict[str, s
     print(f"{utc_now_iso()}  seismic: sent {sent} new ({len(quakes)} in feed)")
     return current
 
+# `docker stop` sends SIGTERM, not Ctrl+C. Python would exit immediately and 
+# skip the finally block -- losing queued messages. Raising KeyboardInterrupt 
+# sends SIGTERM down the same clean-shutdown path as CTRL+C
+def handle_sigterm(signum, frame):
+    raise KeyboardInterrupt()
+
 
 # --- Main loop ---
 # Polls both sources every POLL_INTERVAL_SECONDS until Ctrl+C.
 def main():
+    signal.signal(signal.SIGTERM, handle_sigterm)
     producer = Producer({"bootstrap.servers": BOOTSTRAP_SERVERS})
     # "Already sent" memory. Lives only in RAM, so a restart resends once
     # (at-least-once delivery).
@@ -158,7 +168,7 @@ def main():
             poll_weather(producer, last_weather)
             last_quakes = poll_seismic(producer, last_quakes)
             # Runs pending delivery callbacks without waiting.
-            producer.flush(0)
+            producer.poll(0)
             time.sleep(POLL_INTERVAL_SECONDS)
     except KeyboardInterrupt:
         # Ctrl+C raises KeyboardInterrupt — catch it to shut down cleanly.
