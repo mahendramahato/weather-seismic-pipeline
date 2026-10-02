@@ -5,6 +5,16 @@
 	# Compress responses (the JS bundle shrinks to about a third).
 	encode gzip
 
+	# Basic security headers: HTTPS only for a year, no MIME-type guessing,
+	# don't send full URLs to other sites, don't reveal the server software.
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+
 	# API requests go to the api container (Docker's internal name "api").
 	handle /api/* {
 		reverse_proxy api:8000
