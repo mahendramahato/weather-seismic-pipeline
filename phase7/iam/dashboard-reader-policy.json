@@ -1,0 +1,39 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RunQueriesInOurWorkgroupOnly",
+      "Effect": "Allow",
+      "Action": ["athena:StartQueryExecution", "athena:GetQueryExecution", "athena:GetQueryResults"],
+      "Resource": "arn:aws:athena:us-west-2:011713309527:workgroup/weather-seismic"
+    },
+    {
+      "Sid": "ReadTableDefinitions",
+      "Effect": "Allow",
+      "Action": ["glue:GetDatabase", "glue:GetTable"],
+      "Resource": [
+        "arn:aws:glue:us-west-2:011713309527:catalog",
+        "arn:aws:glue:us-west-2:011713309527:database/weather_seismic",
+        "arn:aws:glue:us-west-2:011713309527:table/weather_seismic/*"
+      ]
+    },
+    {
+      "Sid": "BucketLevelAccess",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+      "Resource": "arn:aws:s3:::weather-seismic-lake-mahendra"
+    },
+    {
+      "Sid": "ReadCuratedZoneOnly",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::weather-seismic-lake-mahendra/curated/*"
+    },
+    {
+      "Sid": "WriteAndReadQueryResults",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:AbortMultipartUpload"],
+      "Resource": "arn:aws:s3:::weather-seismic-lake-mahendra/athena-results/*"
+    }
+  ]
+}
