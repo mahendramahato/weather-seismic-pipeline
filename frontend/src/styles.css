@@ -1,0 +1,153 @@
+/* Colours in one place, reused below. */
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --text: #1f2328;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --quake: #e65100;
+  --weather: #c62828;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Full-height page: header on top, map + alerts fill the rest. */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.updated,
+.muted {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.error {
+  padding: 0.5rem 1.25rem;
+  background: #fdecea;
+  color: #8a1c13;
+}
+
+/* Map takes 2/3 of the width, alerts 1/3. min-height: 0 lets the alerts
+   list scroll instead of stretching the page. */
+main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.map {
+  flex: 2;
+  height: 100%;
+}
+
+.alerts {
+  flex: 1;
+  min-width: 280px;
+  overflow-y: auto;
+  padding: 1rem;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+}
+
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.tabs button {
+  padding: 0.35rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.tabs button.active {
+  background: var(--text);
+  color: var(--panel);
+}
+
+.alerts ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Each alert: badge on the left, text and time stacked on the right. */
+.alerts li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.5rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+
+.badge {
+  grid-row: span 2;
+  align-self: start;
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 0.75rem;
+}
+
+.seismic .badge {
+  background: var(--quake);
+}
+
+.weather .badge {
+  background: var(--weather);
+}
+
+.when {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+/* Phones: stack the map above the alerts instead of side by side. */
+@media (max-width: 760px) {
+  main {
+    flex-direction: column;
+  }
+
+  .map {
+    flex: none;
+    height: 55vh;
+  }
+
+  .alerts {
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+}
