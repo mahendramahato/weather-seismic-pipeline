@@ -17,7 +17,7 @@
         {
         "Sid": "RunCurateJobOnly",
         "Effect": "Allow",
-        "Action": ["glue:StartJobRun", "glue:GetJobRun", "glue:GetJobRuns"],
+        "Action": ["glue:GetJob", "glue:StartJobRun", "glue:GetJobRun", "glue:GetJobRuns"],
         "Resource": "arn:aws:glue:us-west-2:011713309527:job/curate-daily"
         }
     ]

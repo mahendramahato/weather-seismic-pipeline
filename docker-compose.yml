@@ -1,4 +1,44 @@
 services:
+  # --- Airflow metadata database (run history, task states) ---
+  airflow-postgres:
+    image: postgres:16
+    container_name: airflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow   # not reachable from outside: no ports exposed
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-db:/var/lib/postgresql/data
+
+  # --- Airflow: scheduler + DAG processor + web UI, all in one ---
+  airflow:
+    build: ./phase6
+    container_name: airflow
+    restart: unless-stopped
+    # Run as the server's ubuntu user (uid 1000) so Airflow can read the mounted
+    # ~/.aws credentials (chmod 600, owned by ubuntu). Group 0 is how the
+    # official image supports running as any user.
+    user: "1000:0"
+    command: standalone
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AWS_DEFAULT_REGION: us-west-2
+    volumes:
+      # Your DAG files
+      - ./phase6/dags:/opt/airflow/dags
+      # The whole repo, read-only: scripts + the lake for sync and freshness
+      - .:/opt/project:ro
+      # pipeline-vm's AWS credentials, read-only
+      - ~/.aws:/home/airflow/.aws:ro
+    # Kafka UI already uses 8080 on the host, so expose Airflow on 8081
+    ports:
+      - "127.0.0.1:8081:8080"
+    depends_on:
+      - airflow-postgres
+
   # --- Message broker ---
   kafka:
     image: apache/kafka:3.8.0
@@ -119,3 +159,5 @@ volumes:
   ivy-cache:
   # Kafka's message storage; survives container removal.
   kafka-data:
+  # Airflow's run history.
+  airflow-db:
