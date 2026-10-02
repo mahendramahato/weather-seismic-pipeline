@@ -16,10 +16,10 @@ services:
     build: ./phase6
     container_name: airflow
     restart: unless-stopped
-    # Run as the server's ubuntu user (uid 1000) so Airflow can read the mounted
-    # ~/.aws credentials (chmod 600, owned by ubuntu). Group 0 is how the
-    # official image supports running as any user.
-    user: "1000:0"
+    # Run as the host user that owns ~/.aws (so Airflow can read the chmod 600
+    # credentials). The ID differs between machines (1001 on the Oracle VM), so
+    # it comes from AIRFLOW_UID in a per-machine .env file; 1000 if unset.
+    user: "${AIRFLOW_UID:-1000}:0"
     command: standalone
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
