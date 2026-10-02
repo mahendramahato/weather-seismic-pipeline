@@ -9,3 +9,7 @@ data/
 derby.log
 metastore_db/
 .env.dashboard
+
+# Private interview notes
+INTERVIEW_PREP.md
+PIPELINE_EXPLAINED.md
