@@ -30,7 +30,7 @@ MAX_STALENESS_HOURS = 3
     # optional input when triggering by hand: curate a specific day (backfill)
     params={
         "date": Param(
-            default=None,
+            default="",
             type="string",
             description="Day to curate (yyyy-MM-dd). Empty = the day before the run.",
         )
