@@ -1,0 +1,20 @@
+# Site address: ":80" (plain HTTP on port 80) unless SITE_ADDRESS is set.
+# In Step 7.5 SITE_ADDRESS becomes your domain, and Caddy then fetches an
+# HTTPS certificate for it automatically.
+{$SITE_ADDRESS::80} {
+	# Compress responses (the JS bundle shrinks to about a third).
+	encode gzip
+
+	# API requests go to the api container (Docker's internal name "api").
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	# Everything else: the built React files. Unknown paths fall back to
+	# index.html, the standard setup for single-page apps.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

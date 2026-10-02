@@ -1,4 +1,42 @@
 services:
+  # --- Dashboard API (FastAPI + DuckDB + Athena) ---
+  api:
+    build: ./api
+    container_name: api
+    restart: unless-stopped
+    environment:
+      # Where the lake is inside this container (mounted below).
+      LAKE_DIR: /opt/data/lake
+      AWS_DEFAULT_REGION: us-west-2
+    # dashboard-reader's AWS keys, from a private file that exists only on the
+    # server (git-ignored). required: false so `docker compose config` still
+    # works on machines without it, like the Mac.
+    env_file:
+      - path: .env.dashboard
+        required: false
+    volumes:
+      # Read-only: the public-facing API can never change the lake.
+      - ./data:/opt/data:ro
+    # No ports: only Caddy (same Docker network) can reach it.
+
+  # --- Dashboard web server (Caddy + built React app) ---
+  web:
+    build: ./frontend
+    container_name: web
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    # Step 7.4: local only, for testing through an SSH tunnel.
+    # Step 7.5 changes this to public ports 80 and 443.
+    ports:
+      - "127.0.0.1:8090:80"
+    volumes:
+      # Caddy stores its HTTPS certificates here, so they survive restarts.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+
   # --- Airflow metadata database (run history, task states) ---
   airflow-postgres:
     image: postgres:16
@@ -165,3 +203,7 @@ volumes:
   kafka-data:
   # Airflow's run history.
   airflow-db:
+  # Caddy's certificates and settings.
+  caddy-data:
+  caddy-config:
+
