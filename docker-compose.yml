@@ -26,6 +26,10 @@ services:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AWS_DEFAULT_REGION: us-west-2
+      # Point the AWS CLI and boto3 straight at the mounted files, so they don't
+      # depend on $HOME (which differs when running as uid 1000).
+      AWS_SHARED_CREDENTIALS_FILE: /home/airflow/.aws/credentials
+      AWS_CONFIG_FILE: /home/airflow/.aws/config
     volumes:
       # Your DAG files
       - ./phase6/dags:/opt/airflow/dags
