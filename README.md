@@ -32,48 +32,7 @@ curated data lake on AWS, and serves it on a public dashboard.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    subgraph Sources
-        NOAA[NOAA weather API]
-        USGS[USGS quake feed]
-    end
-
-    subgraph VM["Oracle Cloud VM - Docker Compose"]
-        P[Producer<br/>Python]
-        K[(Kafka<br/>weather / seismic)]
-        SW[Spark stream<br/>weather + z-score]
-        SS[Spark stream<br/>seismic + M4.5 flag]
-        L[(Local lake<br/>Parquet by date)]
-        AF[Airflow<br/>daily DAG]
-        API[FastAPI + DuckDB]
-        C[Caddy<br/>HTTPS]
-    end
-
-    subgraph AWS
-        RAW[(S3 raw/)]
-        G[Glue ETL job]
-        CUR[(S3 curated/)]
-        CAT[Glue Data Catalog]
-        ATH[Athena]
-    end
-
-    NOAA --> P
-    USGS --> P
-    P --> K
-    K --> SW --> L
-    K --> SS --> L
-    AF -- freshness check, sync --> RAW
-    L -.-> RAW
-    AF -- start --> G
-    RAW --> G --> CUR
-    CAT --- ATH
-    ATH --> RAW
-    ATH --> CUR
-    L --> API
-    ATH -- 7-day history --> API
-    API --> C --> U((Browser))
-```
+![Architecture: streaming, batch and serving lanes](docs/architecture.svg)
 
 **Streaming** (always on) handles what's happening *now*: anomaly flags within about a
 minute. **Batch** (nightly) handles *quality*: one compact file per day, the latest
