@@ -31,7 +31,7 @@ MAX_STALENESS_HOURS = 3
     params={
         "date": Param(
             default="",
-            type="string",
+            type=["null", "string"],
             description="Day to curate (yyyy-MM-dd). Empty = the day before the run.",
         )
     },
