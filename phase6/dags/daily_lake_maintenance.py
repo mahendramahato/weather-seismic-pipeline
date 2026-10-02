@@ -25,6 +25,10 @@ MAX_STALENESS_HOURS = 3
     start_date=datetime(2026, 10, 1),
     # don't create runs for every missed day
     catchup=False,
+    # Only one run at a time: extra runs (schedule + manual + backfills) wait in
+    # a queue instead of overlapping. The Glue job allows one run at a time, so
+    # parallel DAG runs would collide with ConcurrentRunsExceededException.
+    max_active_runs=1,
     # one auto retry 5 min later
     default_args={"retries": 1, "retry_delay": timedelta(minutes=5)},
     # optional input when triggering by hand: curate a specific day (backfill)
