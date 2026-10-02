@@ -48,7 +48,7 @@ def daily_lake_maintenance():
         for dataset in ["weather", "seismic"]:
             newest = max(
                 (
-                    os.path.getmtime(os.path.join(folder, os.name))
+                    os.path.getmtime(os.path.join(folder, name))
                     for folder, _, files in os.walk(f"{LAKE_DIR}/{dataset}")
                     for name in files
                     if name.endswith(".parquet")
