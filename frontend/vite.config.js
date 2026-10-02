@@ -10,4 +10,10 @@ export default defineConfig({
       '/api': 'http://localhost:8000',
     },
   },
+  // The 3D globe chunk (mostly three.js) is ~2 MB / ~550 kB gzipped. It's
+  // lazy-loaded separately from the page, so the default 500 kB warning
+  // doesn't apply; warn only if it grows well beyond today's size.
+  build: {
+    chunkSizeWarningLimit: 2500,
+  },
 })

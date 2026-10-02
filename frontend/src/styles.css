@@ -1,153 +1,637 @@
-/* Colours in one place, reused below. */
-:root {
-  --bg: #f6f7f9;
-  --panel: #ffffff;
-  --text: #1f2328;
-  --muted: #6b7280;
-  --border: #e5e7eb;
-  --quake: #e65100;
-  --weather: #c62828;
+/* ---------- Theme colours ----------
+   Light by day, dark by night: useDayTheme() sets <html data-theme="...">.
+   Everything below uses these variables, so the switch is one attribute. */
+:root,
+:root[data-theme='light'] {
   color-scheme: light;
+  --bg: radial-gradient(1200px 700px at 30% 20%, #ffffff 0%, #eaf2fb 45%, #dbe7f4 100%);
+  --panel: rgba(255, 255, 255, 0.78);
+  --panel-solid: #ffffff;
+  --panel-border: rgba(15, 35, 70, 0.09);
+  --card: rgba(255, 255, 255, 0.92);
+  --card-hover: #ffffff;
+  --text: #0f1b2d;
+  --muted: #5b6b80;
+  --accent: #0b7bd8;
+  --shadow: 0 10px 30px rgba(20, 45, 90, 0.10);
+  --spark-line: #0b7bd8;
+  --band: rgba(11, 123, 216, 0.14);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: radial-gradient(1200px 700px at 30% 20%, #10203d 0%, #070d1c 55%, #03060e 100%);
+  --panel: rgba(13, 22, 42, 0.72);
+  --panel-solid: #0d162a;
+  --panel-border: rgba(150, 180, 230, 0.13);
+  --card: rgba(22, 34, 60, 0.72);
+  --card-hover: rgba(30, 46, 80, 0.85);
+  --text: #e7eefb;
+  --muted: #8fa2c0;
+  --accent: #5cb6ff;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  --spark-line: #7cc4ff;
+  --band: rgba(124, 196, 255, 0.16);
+}
+
+/* Status and event colours are the same in both themes. */
+:root {
+  --normal: #22c55e;
+  --anomaly: #f43f5e;
+  --unscored: #94a3b8;
+  --quake: #ffb84d;
+  --quake-sig: #ff5d2e;
 }
 
 * {
   box-sizing: border-box;
 }
 
-body {
-  margin: 0;
-  font-family: system-ui, -apple-system, sans-serif;
-  background: var(--bg);
-  color: var(--text);
+html,
+body,
+#root {
+  height: 100%;
 }
 
-/* Full-height page: header on top, map + alerts fill the rest. */
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  background-attachment: fixed;
+  color: var(--text);
+  transition: background 0.6s ease, color 0.6s ease;
+}
+
+h1,
+h2 {
+  margin: 0;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 0.75rem;
+}
+
+/* ---------- Page layout ---------- */
 .app {
   display: flex;
   flex-direction: column;
   height: 100vh;
 }
 
-header {
+.topbar {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 0.5rem;
-  padding: 0.75rem 1.25rem;
+  gap: 0.75rem;
+  padding: 0.85rem 1.4rem;
   background: var(--panel);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--panel-border);
+  backdrop-filter: blur(14px);
+  z-index: 2;
 }
 
-header h1 {
-  margin: 0;
-  font-size: 1.25rem;
-}
-
-.updated,
-.muted {
-  color: var(--muted);
-  font-size: 0.875rem;
-}
-
-.error {
-  padding: 0.5rem 1.25rem;
-  background: #fdecea;
-  color: #8a1c13;
-}
-
-/* Map takes 2/3 of the width, alerts 1/3. min-height: 0 lets the alerts
-   list scroll instead of stretching the page. */
-main {
-  flex: 1;
+.brand {
   display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+/* A small "planet" logo made with gradients. */
+.brand-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #8fd3ff 0%, #2a7de1 45%, #0b2d6b 100%);
+  box-shadow: 0 0 0 3px rgba(92, 182, 255, 0.18), 0 0 18px rgba(92, 182, 255, 0.45);
+}
+
+.brand h1 {
+  font-size: 1.1rem;
+  letter-spacing: -0.01em;
+}
+
+.topbar-meta {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  font-size: 0.8rem;
+}
+
+.live-badge,
+.theme-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid var(--panel-border);
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--normal);
+  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.6);
+  animation: pulse 2s infinite;
+}
+
+/* Data older than 2 h: amber, not pulsing. */
+.live-badge.stale .live-dot {
+  background: #f59e0b;
+  animation: none;
+}
+
+@keyframes pulse {
+  70% {
+    box-shadow: 0 0 0 8px rgba(34, 197, 94, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+  }
+}
+
+.theme-badge svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.error-bar {
+  padding: 0.55rem 1.4rem;
+  background: #fde8eb;
+  color: #8a1c2b;
+  font-size: 0.9rem;
+}
+
+/* Globe takes the space on the left; the sidebar scrolls on its own. */
+.layout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 400px;
   min-height: 0;
 }
 
-.map {
-  flex: 2;
-  height: 100%;
+/* ---------- Globe ---------- */
+.globe-panel {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.alerts {
-  flex: 1;
-  min-width: 280px;
-  overflow-y: auto;
-  padding: 1rem;
+/* Stars behind the globe at night (CSS, so they cover the whole panel). */
+:root[data-theme='dark'] .globe-panel {
+  background: url('/textures/night-sky.png') center / cover;
+}
+
+.globe-wrap {
+  position: absolute;
+  inset: 0;
+}
+
+.globe-wrap canvas {
+  outline: none;
+}
+
+.globe-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* Stat tiles floating over the globe's top-left corner. */
+.stats {
+  position: absolute;
+  top: 1rem;
+  left: 1rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 170px));
+  gap: 0.6rem;
+  pointer-events: none;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: 14px;
   background: var(--panel);
-  border-left: 1px solid var(--border);
+  border: 1px solid var(--panel-border);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow);
 }
 
+.stat-value {
+  font-size: 1.35rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-label {
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Colour key along the bottom of the globe. */
+.legend {
+  position: absolute;
+  left: 1rem;
+  bottom: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.9rem;
+  padding: 0.5rem 0.85rem;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  backdrop-filter: blur(12px);
+  font-size: 0.74rem;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.legend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.lg-quake { background: var(--quake); }
+.lg-sig { background: var(--quake-sig); box-shadow: 0 0 0 3px rgba(255, 93, 46, 0.3); }
+.lg-normal { background: var(--normal); }
+.lg-anomaly { background: var(--anomaly); }
+.lg-unscored { background: var(--unscored); }
+
+/* Station pins on the globe (created by EarthGlobe.jsx). */
+.station-pin {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.22rem 0.55rem 0.22rem 0.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 999px;
+  background: rgba(8, 15, 30, 0.72);
+  color: #fff;
+  font: 600 0.72rem ui-sans-serif, system-ui, sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: transform 0.15s ease, opacity 0.2s ease;
+}
+
+.station-pin:hover,
+.station-pin.selected {
+  transform: scale(1.12);
+  border-color: #fff;
+}
+
+.station-pin b {
+  font-weight: 700;
+}
+
+.pin-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--unscored);
+}
+
+.station-pin.normal .pin-dot { background: var(--normal); }
+.station-pin.anomaly .pin-dot { background: var(--anomaly); box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.35); }
+
+/* Hover tooltip for quakes (HTML string from EarthGlobe.jsx). */
+.globe-tip {
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  background: rgba(8, 15, 30, 0.88);
+  color: #fff;
+  font: 0.78rem ui-sans-serif, system-ui, sans-serif;
+}
+
+/* ---------- Sidebar ---------- */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+  overflow-y: auto;
+  background: var(--panel);
+  border-left: 1px solid var(--panel-border);
+  backdrop-filter: blur(14px);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.7rem;
+}
+
+.panel h2 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.station-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+/* Station cards. */
+.station-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.85rem 0.95rem 0.7rem;
+  border: 1px solid var(--panel-border);
+  border-left: 4px solid var(--unscored);
+  border-radius: 14px;
+  background: var(--card);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.station-card:hover {
+  transform: translateY(-1px);
+  background: var(--card-hover);
+}
+
+.station-card.normal { border-left-color: var(--normal); }
+.station-card.anomaly { border-left-color: var(--anomaly); }
+.station-card.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.city {
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.card-sub {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.status-chip {
+  flex-shrink: 0;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--muted);
+}
+
+.status-chip.normal { background: rgba(34, 197, 94, 0.15); color: #16a34a; }
+.status-chip.anomaly { background: rgba(244, 63, 94, 0.16); color: #e11d48; }
+
+.card-body {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.temp {
+  font-size: 2.1rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.unit {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin-left: 0.1rem;
+  vertical-align: top;
+}
+
+.conditions {
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.metrics {
+  display: flex;
+  gap: 0.8rem;
+  margin: 0;
+  font-size: 0.72rem;
+}
+
+.metrics dt {
+  color: var(--muted);
+}
+
+.metrics dd {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 24h sparkline. */
+.spark-wrap {
+  margin: 0;
+}
+
+.spark {
+  width: 100%;
+  height: 48px;
+  display: block;
+  overflow: hidden;
+}
+
+.spark-wrap figcaption {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.15rem;
+  font-size: 0.66rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.spark-band {
+  fill: var(--band);
+}
+
+.spark-line {
+  fill: none;
+  stroke: var(--spark-line);
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.spark-anomaly {
+  fill: var(--anomaly);
+}
+
+.spark-now {
+  fill: var(--spark-line);
+}
+
+.spark-empty {
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding: 0.6rem 0;
+}
+
+/* Alerts. */
 .tabs {
   display: flex;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
+  gap: 0.25rem;
+  padding: 0.2rem;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid var(--panel-border);
 }
 
 .tabs button {
-  padding: 0.35rem 0.85rem;
-  border: 1px solid var(--border);
+  padding: 0.25rem 0.75rem;
+  border: none;
   border-radius: 999px;
-  background: var(--panel);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
   cursor: pointer;
 }
 
 .tabs button.active {
-  background: var(--text);
-  color: var(--panel);
+  background: var(--accent);
+  color: #fff;
 }
 
-.alerts ul {
+/* The alerts sit at the top of the sidebar; a long list scrolls inside its
+   own box (about 4 alerts tall) so the station cards stay in view below it. */
+.alert-list {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0 0.2rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  max-height: 17rem;
+  overflow-y: auto;
 }
 
-/* Each alert: badge on the left, text and time stacked on the right. */
-.alerts li {
+.alert-list li {
   display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0.15rem 0.5rem;
-  padding: 0.6rem 0;
-  border-bottom: 1px solid var(--border);
-  font-size: 0.9rem;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  gap: 0.6rem;
+  padding: 0.6rem 0.7rem;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px solid var(--panel-border);
+  font-size: 0.82rem;
 }
 
-.badge {
-  grid-row: span 2;
-  align-self: start;
-  padding: 0.1rem 0.45rem;
-  border-radius: 4px;
-  color: #fff;
-  font-size: 0.75rem;
+.alert-icon {
+  width: 10px;
+  height: 10px;
+  margin-top: 0.3rem;
+  border-radius: 50%;
 }
 
-.seismic .badge {
-  background: var(--quake);
-}
+.seismic .alert-icon { background: var(--quake-sig); box-shadow: 0 0 0 3px rgba(255, 93, 46, 0.25); }
+.weather .alert-icon { background: var(--anomaly); box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.25); }
 
-.weather .badge {
-  background: var(--weather);
-}
-
-.when {
+.alert-kind {
+  display: block;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: var(--muted);
-  font-size: 0.8rem;
 }
 
-/* Phones: stack the map above the alerts instead of side by side. */
-@media (max-width: 760px) {
-  main {
+.alert-when {
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.credits {
+  margin-top: auto;
+  padding-top: 0.5rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+/* ---------- Phones and narrow windows ----------
+   Globe on top, then the stat tiles (moved out from over the globe so they
+   don't cover it), then stations and alerts; the whole page scrolls. */
+@media (max-width: 900px) {
+  .app {
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .layout {
+    display: flex;
     flex-direction: column;
   }
 
-  .map {
-    flex: none;
+  .globe-panel {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .globe-wrap {
+    position: relative;
     height: 55vh;
   }
 
-  .alerts {
+  .stats {
+    position: static;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 0 1rem 1rem;
+  }
+
+  .legend {
+    display: none;
+  }
+
+  .sidebar {
     border-left: none;
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--panel-border);
+    overflow: visible;
   }
 }

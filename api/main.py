@@ -94,6 +94,8 @@ def athena_query(sql, params):
 def live_stations():
     return query(f"""
         SELECT station_id, lat, lon, temperature_c, description,
+               round(humidity_pct) AS humidity_pct,
+               round(wind_speed_kmh) AS wind_speed_kmh,
                strftime(observed_at, '%Y-%m-%dT%H:%M:%SZ') AS observed_at,
                round(z_score, 1) AS z_score,
                CASE WHEN z_score IS NULL THEN 'unscored'
@@ -144,6 +146,23 @@ def live_alerts(hours):
     """, [cutoff, cutoff])
 
 
+# Every reading in the last `hours` with the detector's baseline, for the
+# station sparklines (temperature line + the ±3σ "normal range" band).
+@ttl_cache(30)
+def live_weather_history(hours):
+    return query(f"""
+        SELECT station_id,
+               strftime(observed_at, '%Y-%m-%dT%H:%M:%SZ') AS observed_at,
+               temperature_c,
+               round(baseline_avg, 2) AS baseline_avg,
+               round(baseline_std, 2) AS baseline_std,
+               is_anomaly
+        FROM {WEATHER}
+        WHERE observed_at >= ? AND temperature_c IS NOT NULL
+        ORDER BY station_id, observed_at
+    """, [hours_ago(hours)])
+
+
 # --- History (Athena over curated tables, cached 10 min) ---
 # Curated already holds one row per reading and only the latest quake revision,
 # so no de-duplication is needed here. Filtering on `date` (the partition
@@ -179,6 +198,11 @@ def stations():
 @app.get("/api/quakes")
 def quakes(hours: int = Query(24, ge=1, le=168)):
     return live_quakes(hours)
+
+
+@app.get("/api/weather/history")
+def weather_history(hours: int = Query(24, ge=1, le=168)):
+    return live_weather_history(hours)
 
 
 @app.get("/api/alerts")

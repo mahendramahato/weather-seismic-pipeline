@@ -1,0 +1,71 @@
+// A tiny 24h temperature chart. The shaded band is the anomaly detector's
+// "normal range" (baseline average ± 3 standard deviations, with the same
+// 1 °C floor the Spark job uses); red dots are readings it flagged.
+const WIDTH = 260
+const HEIGHT = 56
+const PAD = 5
+
+function bandEdges(point) {
+  const spread = 3 * Math.max(point.baseline_std ?? 0, 1)
+  return [point.baseline_avg - spread, point.baseline_avg + spread]
+}
+
+export default function Sparkline({ points }) {
+  if (points.length < 2) {
+    return <div className="spark-empty">Collecting readings…</div>
+  }
+
+  const times = points.map((p) => Date.parse(p.observed_at))
+  const banded = points.filter((p) => p.baseline_avg !== null)
+
+  // Scale to the temperatures (at least a 4 °C span) rather than the band, so
+  // the line keeps its shape. The band may run past the top/bottom edge and is
+  // clipped there — a reading outside the band then stands out clearly.
+  const temps = points.map((p) => p.temperature_c)
+  const middle = (Math.min(...temps) + Math.max(...temps)) / 2
+  const half = Math.max((Math.max(...temps) - Math.min(...temps)) / 2, 2) * 1.25
+  const low = middle - half
+  const high = middle + half
+  const start = Math.min(...times)
+  const span = Math.max(Math.max(...times) - start, 1)
+
+  const x = (t) => PAD + ((t - start) / span) * (WIDTH - 2 * PAD)
+  const y = (v) => HEIGHT - PAD - ((v - low) / Math.max(high - low, 1)) * (HEIGHT - 2 * PAD)
+
+  const line = points
+    .map((p, i) => `${i ? 'L' : 'M'}${x(times[i]).toFixed(1)},${y(p.temperature_c).toFixed(1)}`)
+    .join(' ')
+
+  // Band polygon: along the top edge left-to-right, back along the bottom.
+  const bandTop = banded.map((p) => `${x(Date.parse(p.observed_at)).toFixed(1)},${y(bandEdges(p)[1]).toFixed(1)}`)
+  const bandBottom = banded.map((p) => `${x(Date.parse(p.observed_at)).toFixed(1)},${y(bandEdges(p)[0]).toFixed(1)}`)
+  const band = [...bandTop, ...bandBottom.reverse()].join(' ')
+
+  const last = points.at(-1)
+
+  return (
+    <figure className="spark-wrap">
+      <svg
+        className="spark"
+        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+        preserveAspectRatio="none"
+        role="img"
+        aria-label="Temperature over the last 24 hours"
+      >
+        {banded.length > 1 && <polygon className="spark-band" points={band} />}
+        <path className="spark-line" d={line} />
+        {points.map((p, i) =>
+          p.is_anomaly ? <circle key={i} className="spark-anomaly" cx={x(times[i])} cy={y(p.temperature_c)} r="3" /> : null,
+        )}
+        <circle className="spark-now" cx={x(times.at(-1))} cy={y(last.temperature_c)} r="2.6" />
+      </svg>
+      <figcaption>
+        <span>24 h</span>
+        <span>
+          {Math.round(Math.min(...temps))}° – {Math.round(Math.max(...temps))}°C
+        </span>
+        <span>now</span>
+      </figcaption>
+    </figure>
+  )
+}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getJson, timeAgo } from '../api.js'
+import { getJson, timeAgo } from '../lib/format.js'
 
 // The two tabs and which API endpoint each one reads:
 // 24 hours = live lake (DuckDB); 7 days = curated (Athena) + live merged.
@@ -10,52 +10,60 @@ const TABS = {
 
 export default function AlertsFeed() {
   const [tab, setTab] = useState('day')
-  const [alerts, setAlerts] = useState([])
-  const [loading, setLoading] = useState(true)
+  // The last answer received, remembering which tab it belongs to.
+  const [result, setResult] = useState({ tab: null, alerts: [] })
 
-  // Reload whenever the selected tab changes ([tab] = run again when tab changes).
-  // `cancelled` ignores a slow response that arrives after the user already
-  // switched tabs, so an old answer can't overwrite the newer one.
+  // Reload when the tab changes; ignore a slow reply from a tab the user
+  // already left, so an old answer can't overwrite the newer one.
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
     getJson(TABS[tab].path)
-      .then((data) => {
-        if (!cancelled) setAlerts(data)
-      })
-      .catch(() => {
-        if (!cancelled) setAlerts([])
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+      .then((data) => !cancelled && setResult({ tab, alerts: data }))
+      .catch(() => !cancelled && setResult({ tab, alerts: [] }))
     return () => {
       cancelled = true
     }
   }, [tab])
 
+  // Still loading while the answer we hold is for a different tab.
+  const loading = result.tab !== tab
+  const alerts = loading ? [] : result.alerts
+
   return (
-    <aside className="alerts">
-      <div className="tabs">
-        {Object.entries(TABS).map(([key, { label }]) => (
-          <button key={key} className={key === tab ? 'active' : ''} onClick={() => setTab(key)}>
-            {label}
-          </button>
-        ))}
+    <section className="panel alerts">
+      <div className="panel-head">
+        <h2>Alerts</h2>
+        <div className="tabs" role="tablist">
+          {Object.entries(TABS).map(([key, { label }]) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={key === tab}
+              className={key === tab ? 'active' : ''}
+              onClick={() => setTab(key)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {loading && <p className="muted">Loading…</p>}
-      {!loading && alerts.length === 0 && <p className="muted">No alerts in this period.</p>}
+      {!loading && alerts.length === 0 && <p className="muted">Nothing flagged in this period.</p>}
 
-      <ul>
+      <ul className="alert-list">
         {alerts.map((a) => (
           <li key={`${a.source}-${a.id}-${a.event_time}`} className={a.source}>
-            <span className="badge">{a.source === 'seismic' ? 'Quake' : 'Weather'}</span>
-            <span className="detail">{a.detail}</span>
-            <span className="when">{timeAgo(a.event_time)}</span>
+            <span className="alert-icon" aria-hidden="true" />
+            <span className="alert-text">
+              <span className="alert-kind">{a.source === 'seismic' ? 'Earthquake' : 'Weather anomaly'}</span>
+              {a.detail}
+            </span>
+            <span className="alert-when">{timeAgo(a.event_time)}</span>
           </li>
         ))}
       </ul>
-    </aside>
+    </section>
   )
 }
