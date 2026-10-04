@@ -61,6 +61,7 @@ services:
     user: "${AIRFLOW_UID:-1000}:0"
     command: standalone
     environment:
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: "admin:admin,agent_viewer:viewer"
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
