@@ -23,6 +23,8 @@ from pyspark.sql.functions import (
 args = getResolvedOptions(sys.argv, ["JOB_NAME", "DATE", "BUCKET"])
 RUN_DATE = args["DATE"]
 CURATED_PATH = f"s3://{args['BUCKET']}/curated"
+RAW_PATH = f"s3://{args['BUCKET']}/raw"
+
 
 # --- Glue + Spark setup ---
 # GlueContext wraps Spark and connects it to the Glue Data Catalog.
@@ -60,23 +62,36 @@ def write_day(df, name):
         .parquet(f"{CURATED_PATH}/{name}")
     )
 
+# Reads one day of raw data straight from its S3 folder — not through the
+# catalog. Spark only sees partitions that are *registered* in the Glue Data
+# Catalog, and partition projection (an Athena-only feature) never registers
+# new days, so reading via the catalog returned 0 rows for every new day.
+# basePath keeps `date` as a column. If the day's folder doesn't exist, Spark
+# raises an error — a missing day should fail loudly, not "succeed" empty.
+def read_raw_day(name):
+    return (
+        spark.read
+        .option("basePath", f"{RAW_PATH}/{name}/")
+        .parquet(f"{RAW_PATH}/{name}/date={RUN_DATE}/")
+    )
 
+
+raw_weather = read_raw_day("weather")
+# A day with no weather readings means something upstream broke (sync,
+# streaming, producer). Fail so Airflow shows red, instead of a green run that
+# wrote nothing — which is how this bug stayed hidden for four nights.
+if raw_weather.count() == 0:
+    raise RuntimeError(f"No raw weather rows for {RUN_DATE}; refusing to write an empty day")
 # --- Weather: remove leftover duplicates ---
 # foreachBatch is at-least-once, so a retried batch can leave the same reading
 # twice; keep the most recently ingested copy of each (station, observed_at).
-raw_weather = (
-    spark.table("weather_seismic.raw_weather")
-    .filter(col("date") == RUN_DATE)
-)
 weather = latest_per_key(raw_weather, ["station_id", "observed_at"], "ingested_at")
 write_day(weather, "weather")
 
 # --- Seismic: keep only the latest revision of each quake ---
 # The raw zone keeps every USGS revision; curated keeps the newest updated_at.
-raw_seismic = (
-    spark.table("weather_seismic.raw_seismic")
-    .filter(col("date") == RUN_DATE)
-)
+raw_seismic = read_raw_day("seismic")
+
 seismic = latest_per_key(raw_seismic, ["event_id"], "updated_at")
 write_day(seismic, "seismic")
 
