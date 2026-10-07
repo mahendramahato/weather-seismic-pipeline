@@ -1,6 +1,11 @@
 // Fetch JSON from our API; throw on an error status so callers can show it.
 export async function getJson(path) {
   const response = await fetch(path)
+  // 429 = the server's rate limit (Caddy) was hit; the page retries on its
+  // regular refresh, so say that instead of showing a bare status code.
+  if (response.status === 429) {
+    throw new Error('too many requests right now — the page will retry in a minute')
+  }
   if (!response.ok) {
     throw new Error(`${path} returned ${response.status}`)
   }

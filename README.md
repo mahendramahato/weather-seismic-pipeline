@@ -37,6 +37,10 @@ curated data lake on AWS, and serves it on a public dashboard.
 
 ![Architecture: streaming, batch and serving lanes](docs/architecture.svg)
 
+Design documents: **[High-Level Design](docs/HLD.md)** (requirements, components,
+decisions, security, cost) · **[Low-Level Design](docs/LLD.md)** (schemas, detection
+algorithm, Glue/Airflow/API/Caddy details, IAM, CI/CD, failure handling).
+
 **Streaming** (always on) handles what's happening *now*: anomaly flags within about a
 minute. **Batch** (nightly) handles *quality*: one compact file per day, the latest
 revision of each quake, and daily summaries.

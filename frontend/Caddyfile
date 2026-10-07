@@ -1,3 +1,10 @@
+# Global options. rate_limit comes from a plugin (see Dockerfile), so Caddy
+# needs to be told where it runs among the built-in directives: first, so
+# excess requests are rejected before any other work is done.
+{
+	order rate_limit first
+}
+
 # Site address: ":80" (plain HTTP on port 80) unless SITE_ADDRESS is set.
 # In Step 7.5 SITE_ADDRESS becomes your domain, and Caddy then fetches an
 # HTTPS certificate for it automatically.
@@ -16,7 +23,18 @@
 
 
 	# API requests go to the api container (Docker's internal name "api").
+	# Rate limit: at most 120 API requests per minute from one IP address
+	# (a dashboard tab makes ~5 a minute, so this leaves room for many
+	# visitors sharing one network). Extra requests get "429 Too Many
+	# Requests" with a Retry-After header and never reach the API.
 	handle /api/* {
+		rate_limit {
+			zone api_per_ip {
+				key {remote_host}
+				events 120
+				window 1m
+			}
+		}
 		reverse_proxy api:8000
 	}
 
