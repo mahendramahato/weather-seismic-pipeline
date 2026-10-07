@@ -28,3 +28,23 @@
 		file_server
 	}
 }
+
+# Pipeline Copilot (separate project: github.com/mahendramahato/pipeline-copilot)
+# on its own subdomain, with its own HTTPS certificate. Its container joins
+# this project's Docker network as "copilot". COPILOT_ADDRESS is the subdomain;
+# the default only serves locally.
+{$COPILOT_ADDRESS:copilot.localhost} {
+	encode gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	# One container serves both the React app and the API. Caddy passes
+	# Server-Sent Events (the live investigation steps) through unbuffered.
+	reverse_proxy copilot:8000
+}

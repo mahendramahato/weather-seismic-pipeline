@@ -26,6 +26,8 @@ services:
     restart: unless-stopped
     environment:
       SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+      # Subdomain for Pipeline Copilot (served by this Caddy, see Caddyfile)
+      COPILOT_ADDRESS: ${COPILOT_ADDRESS:-copilot.localhost}
     # Public web ports. 80 is needed for Let's Encrypt's domain check and to
     # redirect visitors to HTTPS; 443 is the HTTPS site itself.
     ports:
