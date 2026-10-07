@@ -1,0 +1,13 @@
+# Lint settings (ruff) and test settings (pytest) for CI.
+
+[tool.ruff]
+target-version = "py310"
+extend-exclude = ["frontend", "phase0", "data"]
+
+[tool.ruff.lint]
+# E9 = syntax errors, F = real bugs (undefined names, unused imports, ...).
+# Style rules are left off on purpose: the goal is catching mistakes.
+select = ["E9", "F"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

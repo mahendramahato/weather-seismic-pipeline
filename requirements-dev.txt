@@ -1,0 +1,9 @@
+# Tools for running the tests and lint checks (used by CI; not needed in production).
+# The API's own dependencies, so its tests can import it:
+-r api/requirements.txt
+# Same Spark version as the streaming containers (apache/spark:4.1.1):
+pyspark==4.1.1
+pytest==9.1.1
+ruff==0.16.10
+# HTTP client used by FastAPI's TestClient (httpx2: the non-deprecated one):
+httpx2==2.13.1

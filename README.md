@@ -1,5 +1,7 @@
 # Weather & Seismic Data Pipeline
 
+[![CI/CD](https://github.com/mahendramahato/weather-seismic-pipeline/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/mahendramahato/weather-seismic-pipeline/actions/workflows/ci-cd.yml)
+
 An end-to-end streaming and batch data pipeline that ingests live NOAA weather
 observations and USGS earthquakes, detects anomalies in real time, builds a
 curated data lake on AWS, and serves it on a public dashboard.
@@ -120,6 +122,31 @@ revision of each quake, and daily summaries.
 | `api/` | FastAPI + DuckDB dashboard API |
 | `frontend/` | React dashboard and Caddy configuration |
 | `docker-compose.yml` | Every service: Kafka, producer, Spark jobs, Airflow, API, web |
+| `tests/` | Unit tests: the anomaly detector (real Spark) and the API (test Parquet lake) |
+| `.github/workflows/` | CI/CD pipeline (GitHub Actions) |
+| `scripts/deploy.sh` | Server-side deploy: rebuild what changed, restart Spark jobs, smoke test |
+| `cicd/iam/` | AWS role that GitHub Actions assumes via OIDC (no stored AWS keys) |
+
+## CI/CD
+
+GitHub Actions ([`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml)):
+
+- **CI** on every push and pull request, in parallel:
+  - **Python:** `ruff` lint, then `pytest` — the anomaly detector runs in real Spark on
+    synthetic histories with known answers (warm night flagged, warm afternoon normal,
+    calibrating until 5 days, stations kept separate…); the API runs against a small
+    Parquet lake built by the test.
+  - **Frontend:** ESLint and a production build.
+  - **Docker:** `docker compose config` and image builds for the producer, API and web.
+- **CD** on push to `main`, only after all CI jobs pass:
+  1. Uploads the Glue job script to S3 using **GitHub OIDC** — AWS issues short-lived
+     credentials to this repo's `main` branch only, for a role that can write one file.
+  2. SSHes to the server with a deploy-only key (host key pinned) and runs
+     `scripts/deploy.sh`: pull, rebuild changed images, restart the Spark jobs if their
+     code changed, then a smoke test (all services running, API healthy).
+
+Run the checks locally: `pip install -r requirements-dev.txt && ruff check . && pytest`
+(needs Java 17+ for Spark).
 
 ## Running it
 

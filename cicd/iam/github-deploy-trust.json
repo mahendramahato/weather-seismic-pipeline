@@ -1,0 +1,19 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "OnlyThisRepoMainBranch",
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::011713309527:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": "repo:mahendramahato/weather-seismic-pipeline:ref:refs/heads/main"
+        }
+      }
+    }
+  ]
+}

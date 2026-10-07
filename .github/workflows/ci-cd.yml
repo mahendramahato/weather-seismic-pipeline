@@ -1,0 +1,107 @@
+# CI on every push and pull request; CD (deploy) only when main is pushed and
+# every CI job has passed.
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Default: read-only access to the repo. The deploy job adds what it needs.
+permissions:
+  contents: read
+
+jobs:
+  # --- CI: Python lint + unit tests (detector in real Spark, API on a test lake) ---
+  python:
+    name: Python lint and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            api/requirements.txt
+      # Spark needs Java; 21 matches the apache/spark:4.1.1 image in production.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - run: pytest -q
+
+  # --- CI: frontend lint + production build ---
+  frontend:
+    name: Frontend lint and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  # --- CI: compose file is valid and the images build ---
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker compose config -q
+      - run: docker build -t ci-producer ./phase1
+      - run: docker build -t ci-api ./api
+      - run: docker build -t ci-web ./frontend
+
+  # --- CD: deploy to the server ---
+  deploy:
+    name: Deploy to server
+    needs: [python, frontend, docker]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Never run two deploys at once; a newer push waits for the current one.
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      # Lets the job request a short-lived GitHub identity token, which AWS
+      # exchanges for temporary credentials (OIDC) — no AWS keys stored here.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-west-2
+
+      # Glue runs the job script from S3, so uploading it is the deploy.
+      - name: Upload Glue job script
+        run: aws s3 cp phase4/curate_job.py s3://weather-seismic-lake-mahendra/scripts/curate_job.py
+
+      # SSH in with a deploy-only key; the server's host key is pinned in a
+      # secret, so the connection can't be redirected to another machine.
+      - name: Deploy on the server
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          HOST: ${{ vars.DEPLOY_HOST }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key "ubuntu@$HOST" \
+            'cd ~/weather-seismic-pipeline && OLD=$(git rev-parse HEAD) && git pull --ff-only && bash scripts/deploy.sh "$OLD"'
