@@ -11,7 +11,7 @@
       "Condition": {
         "StringEquals": {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": "repo:mahendramahato/weather-seismic-pipeline:ref:refs/heads/main"
+          "token.actions.githubusercontent.com:sub": "repo:mahendramahato@74789335/weather-seismic-pipeline@1390013944:ref:refs/heads/main"
         }
       }
     }
