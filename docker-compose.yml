@@ -28,6 +28,8 @@ services:
       SITE_ADDRESS: ${SITE_ADDRESS:-:80}
       # Subdomain for Pipeline Copilot (served by this Caddy, see Caddyfile)
       COPILOT_ADDRESS: ${COPILOT_ADDRESS:-copilot.localhost}
+      # Subdomain for Soundly (github.com/mahendramahato/i_play)
+      SOUNDLY_ADDRESS: ${SOUNDLY_ADDRESS:-soundly.localhost}
     # Public web ports. 80 is needed for Let's Encrypt's domain check and to
     # redirect visitors to HTTPS; 443 is the HTTPS site itself.
     ports:

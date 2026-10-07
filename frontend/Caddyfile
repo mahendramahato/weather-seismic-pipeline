@@ -66,3 +66,37 @@
 	# Server-Sent Events (the live investigation steps) through unbuffered.
 	reverse_proxy copilot:8000
 }
+
+# Soundly music player (separate project: github.com/mahendramahato/i_play) on
+# its own subdomain. Its nginx joins this project's Docker network as "soundly"
+# and serves both the React app and the API; the app has its own password lock.
+{$SOUNDLY_ADDRESS:soundly.localhost} {
+	# Only text responses are compressed (Caddy's default); audio is left alone,
+	# since it is already compressed and the player relies on byte ranges.
+	encode gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	# Brute-force limit on sign-in, applied before traffic is split across
+	# Soundly's three backends: at most 10 attempts per IP per 15 minutes.
+	handle /api/login {
+		rate_limit {
+			zone soundly_login {
+				key {remote_host}
+				events 10
+				window 15m
+			}
+		}
+		reverse_proxy soundly:80
+	}
+
+	handle {
+		reverse_proxy soundly:80
+	}
+}
