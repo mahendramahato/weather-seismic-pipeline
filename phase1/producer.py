@@ -16,7 +16,14 @@ SEISMIC_TOPIC = "seismic"
 
 # NOAA requires a User-Agent identifying the app and a contact.
 NOAA_HEADERS = {"User-Agent": "weather-seismic-pipeline (mahendramahato33@gmail.com)"}
-STATIONS = ["KBOI", "KJFK", "KLAX", "KORD", "KDEN"]
+# NOAA station codes (mostly airports): the original 5, plus 10 more spread
+# across climates — Pacific Northwest, California coast, desert, plains,
+# upper Midwest, Southeast, subtropical Florida, New England, Alaska, Hawaii.
+STATIONS = [
+    "KBOI", "KJFK", "KLAX", "KORD", "KDEN",
+    "KSEA", "KSFO", "KPHX", "KDFW", "KMSP",
+    "KATL", "KMIA", "KBOS", "PANC", "PHNL",
+]
 POLL_INTERVAL_SECONDS = 60  # seconds
 USGS_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson"
 

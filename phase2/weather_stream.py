@@ -3,23 +3,23 @@ import os
 from datetime import timedelta
 
 from pyspark.errors import AnalysisException
-from pyspark.sql import SparkSession, Window
+from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     abs as spark_abs,
-    avg,
     coalesce,
     col,
     count,
+    countDistinct,
+    first,
     from_json,
     greatest,
+    least,
     lit,
     min as spark_min,
-    stddev,
+    percentile_approx,
+    round as spark_round,
     to_date,
     when,
-    collect_set,
-    date_trunc,
-    size,
 )
 from pyspark.sql.types import (
     DoubleType,
@@ -56,23 +56,36 @@ LAKE_PATH = os.environ.get("LAKE_PATH", "/opt/data/lake/weather")
 CHECKPOINT_PATH = os.environ.get("CHECKPOINT_PATH", "/opt/data/checkpoints/weather")
 
 
-# --- Anomaly rule ---
-# A reading is an anomaly if it's more than Z_THRESHOLD standard deviations
-# from its station's average over the previous BASELINE_HOURS.
-BASELINE_HOURS = 24
-Z_THRESHOLD = 3.0
+# --- Anomaly rule: same-hour seasonal baseline, robust statistics ---
+# Each reading is compared only with the same station's readings at the same
+# time of day (± HOUR_WINDOW_MINUTES) on the previous SEASONAL_DAYS days, so a
+# 3 pm reading is judged against earlier 3 pm readings — the daily temperature
+# cycle no longer distorts the baseline.
+SEASONAL_DAYS = 14
+HOUR_WINDOW_MINUTES = 60
 
-# Fewer readings than this = baseline too thin to judge; the reading isn't scored.
-MIN_BASELINE_READINGS = 12
+# Median and MAD (median absolute deviation) instead of mean and standard
+# deviation: one extreme reading in the history barely moves them.
+# 1.4826 × MAD estimates the standard deviation for normal data, so
+# (reading − median) / (1.4826 × MAD) is the "modified z-score"; 3.5 is the
+# standard cut-off for it (Iglewicz & Hoaglin).
+MAD_TO_STD = 1.4826
+Z_THRESHOLD = 3.5
 
-# The baseline must cover at least this many distinct hours of the previous 24.
-# Temperature follows a daily cycle; a baseline of only night-time readings
-# makes every normal afternoon look like an anomaly (gaps in collection cause this).
-MIN_BASELINE_HOURS = 18
+# Not scored until the baseline has same-hour readings from at least this many
+# previous days (and at least this many readings in total).
+MIN_BASELINE_DAYS = 5
+MIN_BASELINE_READINGS = 5
 
-# Floor for the standard deviation: some stations report whole degrees, so tiny
-# deviations are rounding noise, and a 0 deivation would divide by zero.
-MIN_STD_C = 1.0
+# Floor for the spread: some stations report whole degrees, so tiny spreads
+# are rounding noise, and a spread of 0 would divide by zero.
+MIN_SPREAD_C = 1.0
+
+SECONDS_PER_DAY = 86400
+HOUR_WINDOW_SECONDS = HOUR_WINDOW_MINUTES * 60
+
+# The only history columns the baseline needs.
+BASELINE_COLUMNS = ["station_id", "observed_at", "temperature_c"]
 
 # --- Spark session ---
 # Entry point to Spark. UTC timezone so to_date() assigns every reading to the
@@ -133,76 +146,106 @@ deduped = (
 with_date = deduped.withColumn("date", to_date(col("observed_at")))
 
 # --- History lookup ---
-# Reads the lake's readings since `since`, with the same columns as the batch
-# (the lake also stores score columns, which we don't want mixed in).
+# The lake's readings since `since` (only the columns the baseline needs).
+# Filtering on the `date` partition first means only the last ~2 weeks of
+# folders are opened, however large the lake grows.
 # Returns None on the very first batch, when the lake folder doesn't exist yet.
-def load_history(since, columns):
+def load_history(since):
     try:
         return (
             spark.read.parquet(LAKE_PATH)
+            .filter(col("date") >= lit(since.date()))
             .filter(col("observed_at") >= lit(since))
-            .select(*columns)
+            .select(*BASELINE_COLUMNS)
         )
     except AnalysisException:
         return None
 
-# --- Anomaly scoring (DETECT) ---
-# Combines the new readings with the last 24h of history, computes each new
-# reading's rolling baseline from the readings before it, then its z-score
-def score_batch(batch_df):
-    # how far back history is needed: 24h before the oldest reading in the batch
-    oldest = batch_df.agg(spark_min("observed_at")).first()[0]
-    since = oldest - timedelta(hours=BASELINE_HOURS)
 
-    # new rows are marked is_new=True, history rows False, so we can keep only 
-    # the new ones after the window are computed
-    combined = batch_df.withColumn("is_new", lit(True))
-    history = load_history(since, batch_df.columns)
-    if history is not None:
-        combined = combined.unionByName(history.withColumn("is_new", lit(False)))
+# --- Seasonal baseline (DETECT) ---
+# For each new reading, finds the same station's readings at the same time of
+# day (± 1 hour) on each of the previous 14 days, then scores the reading
+# against their median and MAD.
+def add_seasonal_scores(new_rows, readings):
+    targets = new_rows.select("station_id", col("observed_at").alias("target_at"))
+    baseline = (
+        readings
+        .filter(col("temperature_c").isNotNull())
+        .select("station_id", col("observed_at").alias("base_at"), col("temperature_c").alias("base_temp"))
+    )
 
-    # Rolling window: same station, from 24h before each reading upto 1 second
-    # before it - so a reading is never part of its own baseline.
-    previous_24h = (
-        Window.partitionBy("station_id")
-        .orderBy(col("observed_at").cast("long"))
-        .rangeBetween(-BASELINE_HOURS * 3600, -1)
+    # Seconds between the baseline reading and the new one, and how far apart
+    # their times of day are (wrapping around midnight: 23:30 vs 00:10 = 40 min).
+    gap = col("target_at").cast("long") - col("base_at").cast("long")
+    offset = gap % SECONDS_PER_DAY
+    clock_distance = least(offset, lit(SECONDS_PER_DAY) - offset)
+
+    # Pair each new reading with its same-hour readings from previous days only
+    # (at least ~23 h earlier — never today's, never itself).
+    pairs = (
+        targets.join(baseline, "station_id")
+        .filter(gap >= SECONDS_PER_DAY - HOUR_WINDOW_SECONDS)
+        .filter(gap <= SEASONAL_DAYS * SECONDS_PER_DAY + HOUR_WINDOW_SECONDS)
+        .filter(clock_distance <= HOUR_WINDOW_SECONDS)
+        .withColumn("days_back", spark_round(gap / SECONDS_PER_DAY))
+    )
+
+    # Median first; then MAD = median of each reading's distance from it.
+    keys = ["station_id", "target_at"]
+    medians = pairs.groupBy(keys).agg(percentile_approx("base_temp", 0.5).alias("baseline_median"))
+    stats = (
+        pairs.join(medians, keys)
+        .groupBy(keys)
+        .agg(
+            first("baseline_median").alias("baseline_median"),
+            percentile_approx(spark_abs(col("base_temp") - col("baseline_median")), 0.5).alias("mad"),
+            count("*").alias("baseline_count"),
+            countDistinct("days_back").alias("baseline_days"),
+        )
+        # Spread on the same scale as a standard deviation.
+        .withColumn("baseline_spread", col("mad") * MAD_TO_STD)
+        .drop("mad")
+        .withColumnRenamed("target_at", "observed_at")
     )
 
     return (
-        combined
-        .withColumn("baseline_avg", avg("temperature_c").over(previous_24h))
-        .withColumn("baseline_std", stddev("temperature_c").over(previous_24h))
-        .withColumn("baseline_count", count("temperature_c").over(previous_24h))
-        # Distinct hours covered by the baseline: round each time down to the hour,
-        # collect the unique values, count them.
-        .withColumn(
-            "baseline_hours",
-            size(collect_set(date_trunc("hour", col("observed_at"))).over(previous_24h)),
-        )
-        .filter(col("is_new"))
-        .drop("is_new")
-
-        # z = how many standard deviations from the baseline average.
-        # NULL when the baseline is too thin (too few readings) or too lopsided
-        # (too few distinct hours) to judge.
+        new_rows.join(stats, ["station_id", "observed_at"], "left")
+        # Readings with no same-hour history get 0, not NULL, for clarity.
+        .withColumn("baseline_count", coalesce(col("baseline_count"), lit(0)))
+        .withColumn("baseline_days", coalesce(col("baseline_days"), lit(0)))
+        # Modified z-score; NULL (= "calibrating") until enough days of history.
         .withColumn(
             "z_score",
             when(
-                (col("baseline_count") >= MIN_BASELINE_READINGS)
-                & (col("baseline_hours") >= MIN_BASELINE_HOURS),
-                (col("temperature_c") - col("baseline_avg"))
-                / greatest(col("baseline_std"), lit(MIN_STD_C)),
+                (col("baseline_days") >= MIN_BASELINE_DAYS)
+                & (col("baseline_count") >= MIN_BASELINE_READINGS),
+                (col("temperature_c") - col("baseline_median"))
+                / greatest(col("baseline_spread"), lit(MIN_SPREAD_C)),
             ),
         )
-        # anomaly = z beyond the threshold in either direction (too hot or too cold)
-        # NULL z (not scored) counts as not an anomaly
-        .withColumn(
-            "is_anomaly",
-            coalesce(spark_abs(col("z_score")) > Z_THRESHOLD, lit(False)),
-        )
+        # Anomaly = beyond the threshold in either direction (too hot or too
+        # cold). NULL z (not scored) counts as not an anomaly.
+        .withColumn("is_anomaly", coalesce(spark_abs(col("z_score")) > Z_THRESHOLD, lit(False)))
     )
-                                    
+
+
+# --- Anomaly scoring for one micro-batch ---
+# Baseline candidates = the lake's last 2 weeks plus this batch itself (on a
+# replay, the whole history arrives in one batch), de-duplicated in case a
+# retried batch is already in the lake.
+def score_batch(batch_df):
+    oldest = batch_df.agg(spark_min("observed_at")).first()[0]
+    since = oldest - timedelta(days=SEASONAL_DAYS, seconds=HOUR_WINDOW_SECONDS)
+
+    readings = batch_df.select(*BASELINE_COLUMNS)
+    history = load_history(since)
+    if history is not None:
+        readings = readings.unionByName(history)
+    readings = readings.dropDuplicates(["station_id", "observed_at"])
+
+    return add_seasonal_scores(batch_df, readings)
+
+
 # --- Per-batch processing ---
 # Spark calls this once per micro-batch. batch_df is a normal (non-streaming)
 # DataFrame holding only this batch's new rows; batch_id counts up 0, 1, 2 ...
@@ -234,7 +277,8 @@ def process_batch(batch_df, batch_id):
     for row in scored.filter(col("is_anomaly")).collect():
         print(
             f"  ANOMALY {row.station_id} {row.observed_at} {row.temperature_c}°C "
-            f"(baseline {row.baseline_avg:.1f} ± {row.baseline_std:.1f}, z = {row.z_score:.1f})"
+            f"(same-hour median {row.baseline_median:.1f}, spread {row.baseline_spread:.1f}, "
+            f"{row.baseline_days} days, z = {row.z_score:.1f})"
         )
     # free the memory
     scored.unpersist()

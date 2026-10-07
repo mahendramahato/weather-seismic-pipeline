@@ -17,12 +17,13 @@ curated data lake on AWS, and serves it on a public dashboard.
 
 ## What it does
 
-- Polls 5 NOAA weather stations and the USGS past-hour earthquake feed every minute.
+- Polls 15 NOAA weather stations (from Anchorage and Honolulu to Miami and Boston) and
+  the USGS past-hour earthquake feed every minute.
 - Streams readings through **Kafka** into **Spark Structured Streaming**, which parses,
   deduplicates and scores them in real time:
   - earthquakes of **M4.5+** are flagged as significant;
-  - each weather reading gets a **z-score against its station's rolling 24-hour baseline**,
-    flagged when |z| > 3.
+  - each weather reading gets a **modified z-score against the same station at the same
+    time of day over the previous 14 days** (median and MAD), flagged when |z| > 3.5.
 - Writes date-partitioned **Parquet** to a local lake, synced to an **S3** raw zone.
 - A nightly **Airflow** DAG checks data freshness, syncs to S3 and runs an idempotent
   **AWS Glue** job that compacts, deduplicates and aggregates each day into a curated zone.
@@ -60,9 +61,13 @@ revision of each quake, and daily summaries.
 - **Checkpoints and replay.** Spark checkpoints its Kafka offsets, so restarts resume
   exactly where they stopped. After logic changes, deleting the lake and its
   checkpoint together replays everything from Kafka.
-- **Detection that knows when it can't judge.** A station is only scored when its
-  baseline has at least 12 readings covering 18 of the previous 24 hours. Without this,
-  gaps in collection made ordinary afternoons look anomalous (see below).
+- **Seasonal, robust anomaly detection.** Temperature follows a daily cycle, so each
+  reading is compared only with the same hour (±1 h) on the previous 14 days, using the
+  median and MAD (median absolute deviation) so past outliers barely move the baseline.
+  A reading isn't scored until it has same-hour history from at least 5 previous days.
+  This replaced a rolling 24-hour mean/std detector, which mixed nights with afternoons
+  (see below): in a synthetic test, a 21 °C night reading that the old detector scored
+  as normal is now flagged (z = +11.7), while the same 21 °C in the afternoon is normal.
 - **Idempotent batch jobs.** The Glue job processes one day and overwrites only that
   day's partition (dynamic partition overwrite), so retries and backfills never
   duplicate data. Airflow runs one DAG run at a time because the Glue job allows one
@@ -82,9 +87,15 @@ revision of each quake, and daily summaries.
 
 - **The first detector produced 15 false positives.** Investigation showed the laptop
   sleeping had left the baselines made almost entirely of night-time readings, so
-  normal afternoons scored z > 3. Fixed with the baseline-coverage rule, verified with
-  a synthetic-data test (an isolated Kafka topic and lake, with known expected results),
-  and made permanent by moving the pipeline to an always-on server.
+  normal afternoons scored z > 3. First fixed with a baseline-coverage rule, verified
+  with a synthetic-data test (an isolated Kafka topic and lake, with known expected
+  results), and made permanent by moving the pipeline to an always-on server; later
+  replaced by the same-hour seasonal baseline, which removes the daily-cycle problem
+  at its source.
+- **A silent zero-row batch job.** Partition projection is an Athena feature; the Glue
+  job's Spark only sees partitions registered in the catalog. After the crawler was
+  removed, the nightly job read 0 rows for four nights while Airflow showed success.
+  Fixed by reading S3 paths directly and failing the job on empty input.
 - **Many bugs failed silently rather than crashing**: a schema field typo producing
   NULL columns, an empty `requirements.txt` causing a container crash loop, a
   misnamed DAG folder mounted as an empty directory, a container user ID (1000) that

@@ -5,6 +5,16 @@ export const STATION_NAMES = {
   KJFK: 'New York',
   KLAX: 'Los Angeles',
   KORD: 'Chicago',
+  KSEA: 'Seattle',
+  KSFO: 'San Francisco',
+  KPHX: 'Phoenix',
+  KDFW: 'Dallas',
+  KMSP: 'Minneapolis',
+  KATL: 'Atlanta',
+  KMIA: 'Miami',
+  KBOS: 'Boston',
+  PANC: 'Anchorage',
+  PHNL: 'Honolulu',
 }
 
 // Status from the streaming detector -> label shown to visitors.

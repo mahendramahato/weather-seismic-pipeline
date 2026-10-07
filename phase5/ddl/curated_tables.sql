@@ -21,7 +21,13 @@ CREATE EXTERNAL TABLE IF NOT EXISTS curated_weather (
     baseline_count  bigint,
     baseline_hours  int,
     z_score         double,
-    is_anomaly      boolean
+    is_anomaly      boolean,
+    -- Seasonal detector (same-hour median/MAD), from October 2026 onward.
+    -- Older rows have the 24-hour columns above instead; Athena shows NULL for
+    -- whichever set a file doesn't have.
+    baseline_median double,
+    baseline_spread double,
+    baseline_days   bigint
 )
 PARTITIONED BY (`date` string)
 STORED AS PARQUET

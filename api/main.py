@@ -11,8 +11,18 @@ from fastapi import FastAPI, Query
 # Lake location (env var so the container can point elsewhere) and the Athena
 # workgroup/database from Phase 5.
 LAKE_DIR = os.environ.get("LAKE_DIR", "data/lake")
-WEATHER = f"read_parquet('{LAKE_DIR}/weather/**/*.parquet', hive_partitioning = true)"
-SEISMIC = f"read_parquet('{LAKE_DIR}/seismic/**/*.parquet', hive_partitioning = true)"
+# union_by_name: files written before and after a detector change have
+# different baseline columns; match columns by name across all files, with
+# NULL where a file doesn't have one.
+WEATHER = f"read_parquet('{LAKE_DIR}/weather/**/*.parquet', hive_partitioning = true, union_by_name = true)"
+SEISMIC = f"read_parquet('{LAKE_DIR}/seismic/**/*.parquet', hive_partitioning = true, union_by_name = true)"
+
+# Must match the Spark job, so the chart's shaded band is exactly the range the
+# detector treats as normal. Current detector: same-hour median ± 3.5 × robust
+# spread; rows from the older 24-hour detector: average ± 3 × std.
+SEASONAL_Z_THRESHOLD = 3.5
+LEGACY_Z_THRESHOLD = 3.0
+MIN_SPREAD_C = 1.0
 ATHENA_WORKGROUP = "weather-seismic"
 ATHENA_DATABASE = "weather_seismic"
 
@@ -154,13 +164,42 @@ def live_weather_history(hours):
         SELECT station_id,
                strftime(observed_at, '%Y-%m-%dT%H:%M:%SZ') AS observed_at,
                temperature_c,
-               round(baseline_avg, 2) AS baseline_avg,
-               round(baseline_std, 2) AS baseline_std,
+               round({band_edge('-')}, 2) AS band_low,
+               round({band_edge('+')}, 2) AS band_high,
                is_anomaly
         FROM {WEATHER}
         WHERE observed_at >= ? AND temperature_c IS NOT NULL
         ORDER BY station_id, observed_at
     """, [hours_ago(hours)])
+
+
+# Which columns exist in the weather lake (refreshed every 5 minutes). Needed
+# because a SQL query fails if it names a column no file has yet — e.g. right
+# after a detector change, before any new-format file has been written.
+@ttl_cache(300)
+def weather_columns():
+    return {row["column_name"] for row in query(f"DESCRIBE SELECT * FROM {WEATHER}")}
+
+
+# SQL for one edge of the "normal range" band ('-' = lower, '+' = upper), for
+# whichever detector scored each row. NULL for unscored rows: no band is drawn
+# until the detector actually judges readings.
+def band_edge(sign):
+    columns = weather_columns()
+    branches = []
+    if "baseline_median" in columns:
+        branches.append(
+            f"WHEN baseline_median IS NOT NULL THEN baseline_median {sign} "
+            f"{SEASONAL_Z_THRESHOLD} * greatest(baseline_spread, {MIN_SPREAD_C})"
+        )
+    if "baseline_avg" in columns:
+        branches.append(
+            f"WHEN baseline_avg IS NOT NULL THEN baseline_avg {sign} "
+            f"{LEGACY_Z_THRESHOLD} * greatest(baseline_std, {MIN_SPREAD_C})"
+        )
+    if not branches:
+        return "NULL"
+    return f"CASE WHEN z_score IS NULL THEN NULL {' '.join(branches)} END"
 
 
 # --- History (Athena over curated tables, cached 10 min) ---

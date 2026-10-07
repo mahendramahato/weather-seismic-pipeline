@@ -22,7 +22,7 @@ export default function StationCard({ station, history, selected, onSelect }) {
         </div>
         <span
           className={`status-chip ${station.status}`}
-          title={station.status === 'unscored' ? 'Needs 18 of the last 24 hours of readings before it can be judged' : undefined}
+          title={station.status === 'unscored' ? 'Needs readings at this time of day from at least 5 previous days before it can be judged' : undefined}
         >
           {STATUS_LABELS[station.status]}
           {station.z_score !== null && ` · z ${station.z_score > 0 ? '+' : ''}${station.z_score}`}

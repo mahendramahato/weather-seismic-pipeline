@@ -68,10 +68,14 @@ def write_day(df, name):
 # new days, so reading via the catalog returned 0 rows for every new day.
 # basePath keeps `date` as a column. If the day's folder doesn't exist, Spark
 # raises an error — a missing day should fail loudly, not "succeed" empty.
+# mergeSchema: a day can contain files from before and after a detector change
+# (different baseline columns); combine all their columns instead of taking
+# one file's schema and silently dropping the others.
 def read_raw_day(name):
     return (
         spark.read
         .option("basePath", f"{RAW_PATH}/{name}/")
+        .option("mergeSchema", "true")
         .parquet(f"{RAW_PATH}/{name}/date={RUN_DATE}/")
     )
 
