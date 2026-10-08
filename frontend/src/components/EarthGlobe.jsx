@@ -3,6 +3,7 @@ import Globe from 'react-globe.gl'
 import * as THREE from 'three'
 import { escapeHtml, timeAgo } from '../lib/format.js'
 import { STATION_NAMES } from '../lib/stations.js'
+import { magnitudeColor } from '../lib/quakes.js'
 import { subsolarPoint } from '../lib/sun.js'
 
 // --- Day/night globe shader ---
@@ -36,23 +37,25 @@ const fragmentShader = `
   void main() {
     float sunlight = dot(normalize(vNormal), toDirection(sunPosition));
     vec4 day = texture2D(dayTexture, vUv);
-    vec4 night = texture2D(nightTexture, vUv);
+    // Night side: city lights plus a faint copy of the daytime map, so the
+    // continents stay readable instead of fading to black.
+    vec4 night = texture2D(nightTexture, vUv) + day * 0.22;
     // Soft band around the day/night line instead of a hard edge (twilight).
     gl_FragColor = mix(night, day, smoothstep(-0.12, 0.12, sunlight));
   }
 `
 
-// A station marker: a compact pill (status dot + temperature) so nearby
-// stations don't overlap; the city name appears when it's selected.
+// A station marker: a small glowing dot in its status colour. The name and
+// temperature appear on hover (and stay visible when selected), so 15
+// stations never pile their labels on top of each other.
 // Built as a real DOM element so it stays crisp and clickable on the globe.
 function stationPin(station, selected, onSelect) {
   const pin = document.createElement('button')
   const name = STATION_NAMES[station.station_id] ?? station.station_id
+  const temperature = station.temperature_c === null ? '–' : `${Math.round(station.temperature_c)}°C`
   pin.className = `station-pin ${station.status}${selected ? ' selected' : ''}`
-  pin.title = `${name} (${station.station_id})`
-  const temperature = station.temperature_c === null ? '–' : `${Math.round(station.temperature_c)}°`
-  const label = selected ? `${escapeHtml(name)} ` : ''
-  pin.innerHTML = `<span class="pin-dot"></span>${label}<b>${temperature}</b>`
+  pin.setAttribute('aria-label', `${name}, ${temperature}`)
+  pin.innerHTML = `<span class="pin-dot"></span><span class="pin-label">${escapeHtml(name)} <b>${temperature}</b></span>`
   pin.style.pointerEvents = 'auto'
   pin.onclick = () => onSelect(station.station_id)
   return pin
@@ -134,13 +137,14 @@ export default function EarthGlobe({ stations, quakes, selectedId, onSelectStati
           backgroundColor="rgba(0,0,0,0)"
           atmosphereColor={theme === 'dark' ? '#6fb3ff' : '#8fc4ff'}
           atmosphereAltitude={0.2}
-          // Quakes: short columns, taller for bigger magnitudes.
+          // Quakes: flat dots, bigger and redder with magnitude.
           pointsData={quakes}
           pointLat="lat"
           pointLng="lon"
-          pointAltitude={(q) => Math.max(0.01, q.magnitude * 0.015)}
-          pointRadius={(q) => (q.is_significant ? 0.5 : 0.28)}
-          pointColor={(q) => (q.is_significant ? '#ff5d2e' : '#ffb84d')}
+          pointAltitude={0.004}
+          pointRadius={(q) => 0.1 + Math.max(q.magnitude, 0) * 0.07}
+          pointColor={(q) => magnitudeColor(q.magnitude)}
+          pointResolution={16}
           pointLabel={(q) =>
             `<div class="globe-tip"><b>M${q.magnitude}</b> ${escapeHtml(q.place)}<br/>${timeAgo(q.event_time)}</div>`
           }
@@ -148,11 +152,11 @@ export default function EarthGlobe({ stations, quakes, selectedId, onSelectStati
           ringsData={significant}
           ringLat="lat"
           ringLng="lon"
-          ringColor={() => (t) => `rgba(255, 93, 46, ${1 - t})`}
+          ringColor={() => (t) => `rgba(239, 68, 68, ${1 - t})`}
           ringMaxRadius={(q) => q.magnitude * 1.3}
           ringPropagationSpeed={2.2}
           ringRepeatPeriod={1500}
-          // Stations: clickable pills.
+          // Stations: clickable dots with hover labels.
           htmlElementsData={stations}
           htmlLat="lat"
           htmlLng="lon"

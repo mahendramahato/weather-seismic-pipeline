@@ -1,13 +1,14 @@
 // A tiny 24h temperature chart. The shaded band is the anomaly detector's
 // "normal range" for each reading (band_low..band_high, computed by the API
 // for whichever detector scored it); red dots are readings it flagged.
+// `compact` = a small inline version for list rows: no caption or dots.
 const WIDTH = 260
 const HEIGHT = 56
 const PAD = 5
 
-export default function Sparkline({ points }) {
+export default function Sparkline({ points, compact = false }) {
   if (points.length < 2) {
-    return <div className="spark-empty">Collecting readings…</div>
+    return compact ? null : <div className="spark-empty">Collecting readings…</div>
   }
 
   const times = points.map((p) => Date.parse(p.observed_at))
@@ -37,6 +38,15 @@ export default function Sparkline({ points }) {
   const band = [...bandTop, ...bandBottom.reverse()].join(' ')
 
   const last = points.at(-1)
+
+  if (compact) {
+    return (
+      <svg className="spark compact" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} preserveAspectRatio="none">
+        {banded.length > 1 && <polygon className="spark-band" points={band} />}
+        <path className="spark-line" d={line} />
+      </svg>
+    )
+  }
 
   return (
     <figure className="spark-wrap">

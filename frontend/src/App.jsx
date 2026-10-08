@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import AlertsFeed from './components/AlertsFeed.jsx'
-import StationCard from './components/StationCard.jsx'
+import StationList from './components/StationList.jsx'
 import { getJson, timeAgo } from './lib/format.js'
 import { useDayTheme } from './lib/useDayTheme.js'
 
@@ -149,23 +149,12 @@ export default function App() {
           {/* Alerts first, so they're visible without scrolling. */}
           <AlertsFeed />
 
-          <section className="panel">
-            <div className="panel-head">
-              <h2>Stations</h2>
-              <span className="muted small">Shaded band = normal range</span>
-            </div>
-            <div className="station-list">
-              {stations.map((s) => (
-                <StationCard
-                  key={s.station_id}
-                  station={s}
-                  history={historyByStation[s.station_id] ?? []}
-                  selected={s.station_id === selectedId}
-                  onSelect={setSelectedId}
-                />
-              ))}
-            </div>
-          </section>
+          <StationList
+            stations={stations}
+            historyByStation={historyByStation}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+          />
 
           <footer className="credits">
             Data: NOAA weather.gov &amp; USGS · Imagery: NASA
