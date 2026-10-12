@@ -100,3 +100,30 @@
 		reverse_proxy soundly:80
 	}
 }
+
+# Momentum Scanner (separate project: github.com/mahendramahato/momentum_scanner)
+# on its own subdomain. Its container joins this project's Docker network as
+# "momentum-scanner"; the app requires its own password and refuses proxied
+# requests if none is configured.
+{$SCANNER_ADDRESS:scanner.localhost} {
+	encode gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	# An open dashboard tab makes ~45 requests a minute (scan + chart refresh),
+	# so 300 per IP leaves room for several tabs while capping password guesses.
+	rate_limit {
+		zone scanner_per_ip {
+			key {remote_host}
+			events 300
+			window 1m
+		}
+	}
+	reverse_proxy momentum-scanner:8000
+}
