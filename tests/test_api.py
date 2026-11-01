@@ -166,3 +166,34 @@ def test_nws_alerts_show_only_alerts_still_in_force(client):
     # Polygons only for Extreme/Severe alerts.
     assert alerts[0]["geometry"] is not None
     assert alerts[1]["geometry"] is None
+
+
+def test_stations_include_extra_fields_even_before_the_lake_has_them(client):
+    station = client.get("/api/stations").json()[0]
+    # The test lake predates the extra fields, so they come back as NULL.
+    assert "dewpoint_c" in station and station["dewpoint_c"] is None
+    assert "cloud_cover" in station
+
+
+def test_forecast_reshapes_the_nws_hourly_periods(client, monkeypatch):
+    import main
+
+    def fake_nws(url):
+        if "/points/" in url:
+            return {"properties": {"forecastHourly": "https://nws.test/hourly"}}
+        assert url.endswith("?units=si")
+        return {"properties": {"periods": [
+            {"startTime": "2026-11-01T13:00:00-07:00", "temperature": 14, "isDaytime": True,
+             "probabilityOfPrecipitation": {"value": 20}, "windSpeed": "13 km/h",
+             "windDirection": "NW", "shortForecast": "Partly Sunny"},
+        ] * 30}}
+
+    monkeypatch.setattr(main, "nws_get", fake_nws)
+    hours = client.get("/api/forecast/KBOI").json()
+    assert len(hours) == 24
+    assert hours[0] == {
+        "time": "2026-11-01T13:00:00-07:00", "temperature_c": 14, "precip_pct": 20,
+        "wind": "13 km/h NW", "summary": "Partly Sunny", "is_day": True,
+    }
+    assert client.get("/api/forecast/KZZZ").status_code == 404
+    assert client.get("/api/forecast/bad!").status_code == 422

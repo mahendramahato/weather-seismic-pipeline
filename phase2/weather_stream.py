@@ -41,6 +41,16 @@ WEATHER_SCHEMA = StructType([
     StructField("humidity_pct", DoubleType()),
     StructField("wind_speed_kmh", DoubleType()),
     StructField("description", StringType()),
+    # Extra observation fields (Nov 2026). Older messages don't have them and
+    # parse as NULL; the lake keeps both kinds of file side by side.
+    StructField("dewpoint_c", DoubleType()),
+    StructField("feels_like_c", DoubleType()),
+    StructField("wind_direction_deg", DoubleType()),
+    StructField("wind_gust_kmh", DoubleType()),
+    StructField("pressure_hpa", DoubleType()),
+    StructField("visibility_km", DoubleType()),
+    StructField("precip_last_hour_mm", DoubleType()),
+    StructField("cloud_cover", StringType()),
     StructField("ingested_at", TimestampType())
 ])
 

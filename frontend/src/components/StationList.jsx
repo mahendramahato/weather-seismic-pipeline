@@ -1,5 +1,4 @@
-import { timeAgo, toFahrenheit } from '../lib/format.js'
-import { STATION_NAMES, STATUS_LABELS } from '../lib/stations.js'
+import { STATION_NAMES } from '../lib/stations.js'
 import Sparkline from './Sparkline.jsx'
 
 // Most interesting first: anomalies, then normal stations furthest from their
@@ -20,13 +19,17 @@ function formatZ(z) {
   return `${z > 0 ? '+' : z < 0 ? '−' : ''}${Math.abs(z).toFixed(1)}`
 }
 
-// One compact row; the selected station expands to show its details and a
-// full 24 h chart.
+// One compact row; selecting it opens the station panel on the right.
 function StationRow({ station, history, selected, onSelect }) {
   const name = STATION_NAMES[station.station_id] ?? station.station_id
   return (
     <li className={`station-row ${station.status}${selected ? ' selected' : ''}`}>
-      <button type="button" className="station-row-main" onClick={() => onSelect(selected ? null : station.station_id)}>
+      <button
+        type="button"
+        className="station-row-main"
+        aria-pressed={selected}
+        onClick={() => onSelect(selected ? null : station.station_id)}
+      >
         <span className="status-dot" aria-hidden="true" />
         <span className="station-name" title={`${name} (${station.station_id})`}>
           {name}
@@ -39,50 +42,6 @@ function StationRow({ station, history, selected, onSelect }) {
           {station.status === 'unscored' ? 'calibrating' : `z ${formatZ(station.z_score)}`}
         </span>
       </button>
-
-      {selected && (
-        <div className="station-details">
-          <dl>
-            <div>
-              <dt>Conditions</dt>
-              <dd>{station.description || '–'}</dd>
-            </div>
-            <div>
-              <dt>Temperature</dt>
-              <dd>
-                {formatTemp(station.temperature_c)}C
-                {station.temperature_c !== null && ` · ${toFahrenheit(station.temperature_c)}°F`}
-              </dd>
-            </div>
-            <div>
-              <dt>Humidity</dt>
-              <dd>{station.humidity_pct === null ? '–' : `${station.humidity_pct}%`}</dd>
-            </div>
-            <div>
-              <dt>Wind</dt>
-              <dd>{station.wind_speed_kmh === null ? '–' : `${station.wind_speed_kmh} km/h`}</dd>
-            </div>
-            <div>
-              <dt>Station</dt>
-              <dd>{station.station_id}</dd>
-            </div>
-            <div>
-              <dt>Status</dt>
-              <dd>{STATUS_LABELS[station.status]}</dd>
-            </div>
-            <div>
-              <dt>Updated</dt>
-              <dd>{timeAgo(station.observed_at)}</dd>
-            </div>
-          </dl>
-          <Sparkline points={history} />
-          {station.status === 'unscored' && (
-            <p className="muted small">
-              Needs readings at this time of day from at least 5 previous days before it can be judged.
-            </p>
-          )}
-        </div>
-      )}
     </li>
   )
 }
@@ -92,7 +51,7 @@ export default function StationList({ stations, historyByStation, selectedId, on
   const scoring = stations.filter((s) => s.status !== 'unscored').length
 
   return (
-    <section className="panel">
+    <section className="panel stations-panel">
       <div className="panel-head">
         <h2>Stations</h2>
         <span className="muted small">

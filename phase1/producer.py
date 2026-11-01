@@ -36,6 +36,23 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# NOAA's cloud-cover codes from clear to fully covered (VV = sky hidden by
+# fog/snow). The station's most-covered layer describes the sky best.
+CLOUD_ORDER = ["SKC", "CLR", "FEW", "SCT", "BKN", "OVC", "VV"]
+
+
+def cloud_cover(layers) -> str | None:
+    amounts = [layer.get("amount") for layer in layers or [] if layer.get("amount") in CLOUD_ORDER]
+    return max(amounts, key=CLOUD_ORDER.index) if amounts else None
+
+
+# NOAA wraps every measurement as {"value": ..., "unitCode": ...}, with value
+# null when the station didn't report it. scale converts units (Pa -> hPa).
+def measure(props: dict, key: str, scale: float = 1.0) -> float | None:
+    value = (props.get(key) or {}).get("value")
+    return None if value is None else round(value * scale, 1)
+
+
 # --- Fetch + clean ---
 # Calls NOAA for one station's latest observation and flattens the large raw
 # response into a small record with only the fields we need.
@@ -56,6 +73,18 @@ def fetch_weather_data(station_id: str) -> dict:
         "humidity_pct": props["relativeHumidity"]["value"],
         "wind_speed_kmh": props["windSpeed"]["value"],
         "description": props["textDescription"],
+        # Extra fields for the dashboard's station panel. All may be None:
+        # not every station reports every one.
+        "dewpoint_c": measure(props, "dewpoint"),
+        # Heat index in summer, wind chill in winter; None when neither applies.
+        "feels_like_c": measure(props, "heatIndex") if measure(props, "heatIndex") is not None
+        else measure(props, "windChill"),
+        "wind_direction_deg": measure(props, "windDirection"),
+        "wind_gust_kmh": measure(props, "windGust"),
+        "pressure_hpa": measure(props, "barometricPressure", 0.01),
+        "visibility_km": measure(props, "visibility", 0.001),
+        "precip_last_hour_mm": measure(props, "precipitationLastHour"),
+        "cloud_cover": cloud_cover(props.get("cloudLayers")),
         "ingested_at": utc_now_iso(),  # processing time: when we fetched it
     }
 

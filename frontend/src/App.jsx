@@ -1,12 +1,13 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import AlertsFeed from './components/AlertsFeed.jsx'
-import NwsAlerts from './components/NwsAlerts.jsx'
 import PipelineView from './components/PipelineView.jsx'
 import QuakeDetail from './components/QuakeDetail.jsx'
+import StationDetail from './components/StationDetail.jsx'
 import StationList from './components/StationList.jsx'
 import StatsGrid from './components/StatsGrid.jsx'
 import TimeScrubber from './components/TimeScrubber.jsx'
 import { getJson, timeAgo } from './lib/format.js'
+import { loadLayers, saveLayers, temperatureColor } from './lib/layers.js'
 import { alertPolygons } from './lib/nws.js'
 import { largest, latestSignificant, magnitudeColor } from './lib/quakes.js'
 import { useDayTheme } from './lib/useDayTheme.js'
@@ -70,6 +71,17 @@ export default function App() {
   const [quakeData, setQuakeData] = useState({ quakes: [], fetchedAt: null })
   const [selectedStationId, setSelectedStationId] = useState(null)
   const [selectedQuakeId, setSelectedQuakeId] = useState(null)
+  // Globe layers switched on (remembered in this browser).
+  const [layers, setLayers] = useState(loadLayers)
+  const toggleLayer = useCallback((key) => {
+    setLayers((current) => {
+      const next = { ...current, [key]: !current[key] }
+      saveLayers(next)
+      return next
+    })
+  }, [])
+  // Which of the two the right-hand detail panel shows: whichever was picked last.
+  const [detailKind, setDetailKind] = useState('quake')
   // Replay time in ms; null = live (show everything).
   const [cursor, setCursor] = useState(null)
   const [error, setError] = useState(null)
@@ -111,7 +123,7 @@ export default function App() {
         const seen = seenSignificant.current
         if (seen) {
           const fresh = quakes.find((q) => q.is_significant && !seen.has(q.event_id))
-          if (fresh) setSelectedQuakeId(fresh.event_id)
+          if (fresh) setSelectedQuakeId(fresh.event_id) // flies there; the panel stays put
         }
         seenSignificant.current = new Set(quakes.filter((q) => q.is_significant).map((q) => q.event_id))
         setQuakeData({ quakes, fetchedAt: Date.now() })
@@ -126,6 +138,16 @@ export default function App() {
       clearInterval(timer)
     }
   }, [windowKey])
+
+  const selectStation = useCallback((id) => {
+    setSelectedStationId(id)
+    setDetailKind(id ? 'station' : 'quake')
+  }, [])
+
+  const selectQuake = useCallback((id) => {
+    setSelectedQuakeId(id)
+    setDetailKind('quake')
+  }, [])
 
   const changeWindow = useCallback((key) => {
     seenSignificant.current = null // a new window isn't "new quakes"
@@ -155,6 +177,9 @@ export default function App() {
   const fallbackQuake = spotlight ?? largest(visibleQuakes)
   const detailQuake = selectedQuake ?? fallbackQuake
   const detailLabel = selectedQuake ? 'Selected quake' : spotlight ? 'Latest significant' : 'Largest quake'
+
+  const selectedStation = live.stations.find((s) => s.station_id === selectedStationId) ?? null
+  const showStation = detailKind === 'station' && selectedStation
 
   const isStale = !live.health.weather || live.fetchedAt - Date.parse(live.health.weather) > STALE_AFTER_MS
 
@@ -198,7 +223,7 @@ export default function App() {
               stations={live.stations}
               historyByStation={historyByStation}
               selectedId={selectedStationId}
-              onSelect={setSelectedStationId}
+              onSelect={selectStation}
             />
           </section>
 
@@ -209,10 +234,12 @@ export default function App() {
                   stations={live.stations}
                   quakes={visibleQuakes}
                   nwsPolygons={nwsPolygons}
+                  layers={layers}
+                  onToggleLayer={toggleLayer}
                   selectedStationId={selectedStationId}
                   selectedQuakeId={selectedQuakeId}
-                  onSelectStation={setSelectedStationId}
-                  onSelectQuake={setSelectedQuakeId}
+                  onSelectStation={selectStation}
+                  onSelectQuake={selectQuake}
                   theme={theme}
                 />
               </Suspense>
@@ -222,7 +249,7 @@ export default function App() {
                   type="button"
                   className="callout"
                   style={{ '--tone': magnitudeColor(spotlight.magnitude) }}
-                  onClick={() => setSelectedQuakeId(spotlight.event_id)}
+                  onClick={() => selectQuake(spotlight.event_id)}
                 >
                   <span className="callout-kicker">
                     <span className="live-dot" aria-hidden="true" />
@@ -238,13 +265,42 @@ export default function App() {
               )}
 
               <div className="legend">
-                <span><i className="lg-small" /> M &lt; 2.5</span>
-                <span><i className="lg-mid" /> M 2.5–4.5</span>
-                <span><i className="lg-sig" /> M 4.5+</span>
-                <span><i className="lg-normal" /> Normal</span>
-                <span><i className="lg-anomaly" /> Anomaly</span>
-                <span><i className="lg-unscored" /> Calibrating</span>
-                <span><i className="lg-nws" /> NWS warning area</span>
+                <span>
+                  <i className="lg-small" /> M &lt; 2.5
+                </span>
+                <span>
+                  <i className="lg-mid" /> M 2.5–4.5
+                </span>
+                <span>
+                  <i className="lg-sig" /> M 4.5+
+                </span>
+                <span>
+                  <i className="lg-normal" /> Normal
+                </span>
+                <span>
+                  <i className="lg-anomaly" /> Anomaly
+                </span>
+                {layers.nws && (
+                  <span>
+                    <i className="lg-nws" /> NWS warning
+                  </span>
+                )}
+                {layers.plates && (
+                  <span>
+                    <i className="lg-plate" /> Plate boundary
+                  </span>
+                )}
+                {layers.heat && (
+                  <span>
+                    <i
+                      className="lg-temp"
+                      style={{
+                        background: `linear-gradient(90deg, ${temperatureColor(-10)}, ${temperatureColor(10)}, ${temperatureColor(25)}, ${temperatureColor(38)})`,
+                      }}
+                    />{' '}
+                    Cold → hot
+                  </span>
+                )}
               </div>
             </div>
 
@@ -259,17 +315,26 @@ export default function App() {
           </section>
 
           <aside className="col col-right" aria-label="Quake details and alerts">
-            <QuakeDetail
-              quake={detailQuake}
-              label={detailLabel}
-              onClose={selectedQuake ? () => setSelectedQuakeId(null) : null}
-            />
-            <AlertsFeed />
-            <NwsAlerts alerts={live.nws} />
-            <footer className="credits">Data: NOAA weather.gov &amp; USGS · Imagery: NASA</footer>
+            {showStation ? (
+              <StationDetail
+                station={selectedStation}
+                history={historyByStation[selectedStation.station_id] ?? []}
+                onClose={() => selectStation(null)}
+              />
+            ) : (
+              <QuakeDetail
+                quake={detailQuake}
+                label={detailLabel}
+                onClose={selectedQuake ? () => setSelectedQuakeId(null) : null}
+              />
+            )}
+            <AlertsFeed nwsAlerts={live.nws} />
           </aside>
         </main>
       )}
+      <footer className="credits">
+        Data: NOAA weather.gov &amp; NWS · USGS · Plates: Bird (2003) PB2002 · Imagery: NASA
+      </footer>
     </div>
   )
 }

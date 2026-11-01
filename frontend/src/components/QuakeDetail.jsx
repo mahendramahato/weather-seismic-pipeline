@@ -13,7 +13,7 @@ function formatCoord(value, positive, negative) {
 export default function QuakeDetail({ quake, label, onClose }) {
   if (!quake) {
     return (
-      <section className="panel quake-detail">
+      <section className="panel detail-panel quake-detail">
         <div className="panel-head">
           <h2>Earthquakes</h2>
         </div>
@@ -26,7 +26,7 @@ export default function QuakeDetail({ quake, label, onClose }) {
   const depth = Math.max(quake.depth_km ?? 0, 0)
 
   return (
-    <section className="panel quake-detail" aria-label="Earthquake details">
+    <section className="panel detail-panel quake-detail" aria-label="Earthquake details">
       <div className="panel-head">
         <span className="kicker">{label}</span>
         {onClose && (

@@ -3,6 +3,7 @@ import Globe from 'react-globe.gl'
 import * as THREE from 'three'
 import { escapeHtml, timeAgo } from '../lib/format.js'
 import { STATION_NAMES } from '../lib/stations.js'
+import { LAYERS, temperatureColor } from '../lib/layers.js'
 import { severityColor } from '../lib/nws.js'
 import { magnitudeColor, withAlpha } from '../lib/quakes.js'
 import { subsolarPoint } from '../lib/sun.js'
@@ -55,14 +56,27 @@ const ATMOSPHERE = { light: '#8fd3c3', dark: '#5ccfb9' }
 // A station marker: a small glowing dot in its status colour. The name and
 // temperature appear on hover (and stay visible when selected), so 15
 // stations never pile their labels on top of each other.
+// Optional extras: a soft glow coloured by temperature, and an arrow showing
+// where the wind is blowing (longer = stronger).
 // Built as a real DOM element so it stays crisp and clickable on the globe.
-function stationPin(station, selected, onSelect) {
+function stationPin(station, selected, onSelect, layers) {
   const pin = document.createElement('button')
   const name = STATION_NAMES[station.station_id] ?? station.station_id
   const temperature = station.temperature_c === null ? '–' : `${Math.round(station.temperature_c)}°C`
   pin.className = `station-pin ${station.status}${selected ? ' selected' : ''}`
   pin.setAttribute('aria-label', `${name}, ${temperature}`)
-  pin.innerHTML = `<span class="pin-dot"></span><span class="pin-label">${escapeHtml(name)} <b>${temperature}</b></span>`
+
+  let extras = ''
+  if (layers.heat && station.temperature_c !== null) {
+    extras += `<span class="pin-heat" style="background: radial-gradient(circle, ${temperatureColor(station.temperature_c, 0.75)} 0%, ${temperatureColor(station.temperature_c, 0)} 70%)"></span>`
+  }
+  const direction = station.wind_direction_deg
+  if (layers.wind && direction !== null && direction !== undefined && station.wind_speed_kmh) {
+    // NOAA gives the direction the wind comes FROM; the arrow points where it goes.
+    const length = Math.round(Math.min(14 + station.wind_speed_kmh * 0.9, 46))
+    extras += `<span class="pin-wind" style="transform: rotate(${direction + 180}deg)"><i style="height: ${length}px"></i></span>`
+  }
+  pin.innerHTML = `${extras}<span class="pin-dot"></span><span class="pin-label">${escapeHtml(name)} <b>${temperature}</b></span>`
   pin.style.pointerEvents = 'auto'
   pin.onclick = () => onSelect(station.station_id)
   return pin
@@ -78,6 +92,8 @@ export default function EarthGlobe({
   stations,
   quakes,
   nwsPolygons = [],
+  layers,
+  onToggleLayer,
   selectedStationId,
   selectedQuakeId,
   onSelectStation,
@@ -89,6 +105,21 @@ export default function EarthGlobe({
   const stationsRef = useRef(stations)
   const quakesRef = useRef(quakes)
   const [size, setSize] = useState({ width: 0, height: 0 })
+  const [plates, setPlates] = useState([])
+  const [menuOpen, setMenuOpen] = useState(false)
+
+  // Plate boundary lines (Bird 2003, PB2002 model), loaded once on demand.
+  useEffect(() => {
+    if (!layers.plates || plates.length) return undefined
+    let cancelled = false
+    fetch('/data/plates.json')
+      .then((r) => r.json())
+      .then((lines) => !cancelled && setPlates(lines))
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [layers.plates, plates.length])
 
   // Latest data for the fly-to effects below, without re-flying every time
   // the data refreshes.
@@ -203,7 +234,7 @@ export default function EarthGlobe({
           }
           onPointClick={(q) => onSelectQuake(q.event_id)}
           // Ripples spreading out from each M3+ quake.
-          ringsData={rippleQuakes(quakes, selectedQuakeId)}
+          ringsData={layers.ripples ? rippleQuakes(quakes, selectedQuakeId) : []}
           ringLat="lat"
           ringLng="lon"
           ringColor={(q) => {
@@ -215,21 +246,29 @@ export default function EarthGlobe({
           ringRepeatPeriod={(q) => 700 + Math.max(q.magnitude, 1) * 260}
           // NWS Severe/Extreme warning areas: translucent violet shapes
           // lying just above the surface, with the warning on hover.
-          polygonsData={nwsPolygons}
+          polygonsData={layers.nws ? nwsPolygons : []}
           polygonGeoJsonGeometry="geometry"
           polygonCapColor={(a) => withAlpha(severityColor(a.severity), 0.35)}
           polygonSideColor={(a) => withAlpha(severityColor(a.severity), 0.15)}
           polygonStrokeColor={(a) => severityColor(a.severity)}
           polygonAltitude={0.004}
-          polygonLabel={(a) =>
-            `<div class="globe-tip"><b>${escapeHtml(a.event)}</b><br/>${escapeHtml(a.area)}</div>`
-          }
+          polygonLabel={(a) => `<div class="globe-tip"><b>${escapeHtml(a.event)}</b><br/>${escapeHtml(a.area)}</div>`}
+          // Tectonic plate boundaries: thin warm lines. Most quakes happen right
+          // on these edges, which is why they cluster where they do.
+          pathsData={layers.plates ? plates : []}
+          pathPoints={(line) => line}
+          pathPointLat={(p) => p[1]}
+          pathPointLng={(p) => p[0]}
+          pathPointAlt={0.003}
+          pathColor={() => (theme === 'dark' ? 'rgba(255, 160, 105, 0.9)' : 'rgba(255, 140, 80, 0.95)')}
+          pathStroke={2}
+          pathTransitionDuration={0}
           // Stations: clickable dots with hover labels.
           htmlElementsData={stations}
           htmlLat="lat"
           htmlLng="lon"
           htmlAltitude={0.02}
-          htmlElement={(s) => stationPin(s, s.station_id === selectedStationId, onSelectStation)}
+          htmlElement={(s) => stationPin(s, s.station_id === selectedStationId, onSelectStation, layers)}
           // Hide pins for stations on the far side of the globe.
           htmlElementVisibilityModifier={(el, isVisible) => {
             el.style.opacity = isVisible ? 1 : 0
@@ -255,13 +294,51 @@ export default function EarthGlobe({
             <path d="M9 1v3M9 14v3M1 9h3M14 9h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
           </svg>
         </button>
+        <button
+          type="button"
+          className={`icon-btn${menuOpen ? ' on' : ''}`}
+          aria-label="Layers"
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen((open) => !open)}
+        >
+          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+            <path
+              d="M9 2 L16 6 L9 10 L2 6 Z M2 10 L9 14 L16 10"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
         <button type="button" className="icon-btn" aria-label="Start or stop rotation" onClick={toggleRotation}>
           <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
             <path d="M15 9a6 6 0 1 1-2-4.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-            <path d="M13.5 1.5v3.5H10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            <path
+              d="M13.5 1.5v3.5H10"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
           </svg>
         </button>
       </div>
+
+      {menuOpen && (
+        <div className="layers-menu" role="group" aria-labelledby="layers-title">
+          <span id="layers-title" className="layers-title">
+            Layers
+          </span>
+          {LAYERS.map(({ key, label }) => (
+            <label key={key}>
+              <input type="checkbox" checked={layers[key]} onChange={() => onToggleLayer(key)} />
+              {label}
+            </label>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

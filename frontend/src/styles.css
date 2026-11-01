@@ -561,6 +561,19 @@ button {
 .lg-normal { background: var(--normal); }
 .lg-anomaly { background: var(--anomaly); }
 .lg-unscored { background: var(--unscored); }
+.lg-plate {
+  width: 16px !important;
+  height: 3px !important;
+  border-radius: 2px !important;
+  background: #ffb478;
+}
+
+.lg-temp {
+  width: 28px !important;
+  height: 8px !important;
+  border-radius: 4px !important;
+}
+
 .lg-nws { background: color-mix(in srgb, #8f6bd6 45%, transparent); border: 1.5px solid #8f6bd6; border-radius: 3px !important; }
 
 /* Station markers on the globe (created by EarthGlobe.jsx): a glowing dot;
@@ -621,6 +634,93 @@ button {
 .station-pin:hover .pin-label,
 .station-pin.selected .pin-label {
   opacity: 1;
+}
+
+/* Temperature glow and wind arrow, drawn behind the station dot. */
+.pin-heat {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 84px;
+  height: 84px;
+  margin: -42px 0 0 -42px;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.pin-wind {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+/* The arrow starts at the dot and points "up" before rotation; the head is
+   a small triangle at its tip. */
+.pin-wind i {
+  position: absolute;
+  left: -1px;
+  bottom: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.5);
+}
+
+.pin-wind i::after {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: -6px;
+  border: 5px solid transparent;
+  border-top: 0;
+  border-bottom: 7px solid rgba(255, 255, 255, 0.92);
+}
+
+/* Layers menu, opened from the globe controls. */
+.icon-btn.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.layers-menu {
+  position: absolute;
+  top: 12px;
+  left: 68px;
+  min-width: 230px;
+  margin: 0;
+  padding: 10px 14px 12px;
+  border-radius: 14px;
+  background: var(--panel-solid);
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--shadow);
+}
+
+.layers-title {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.layers-menu label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  font-size: 0.86rem;
+  cursor: pointer;
+}
+
+.layers-menu input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
 }
 
 /* Hover tooltip for quakes (HTML string from EarthGlobe.jsx). */
@@ -904,6 +1004,169 @@ button {
   white-space: nowrap;
 }
 
+/* Long lists scroll inside their panel instead of stretching the page. */
+.panel-scroll {
+  max-height: 340px;
+  overflow-y: auto;
+  margin: 0 -6px;
+  padding: 0 6px;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.tab-count {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, #8f6bd6 22%, transparent);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+/* ---------- Station panel ---------- */
+.now {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+}
+
+.now-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 8px;
+}
+
+.now-name {
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.now-temp {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--font-display);
+  font-size: 2.4rem;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.now-desc {
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 16px 0 0;
+}
+
+.field {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--inset);
+  min-width: 0;
+}
+
+.field dt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.field dt svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.field dd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.84rem;
+  white-space: nowrap;
+}
+
+.wind-dir {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.sub-head {
+  margin: 18px 0 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+  font-family: var(--font-body);
+  letter-spacing: 0.02em;
+}
+
+.forecast-strip {
+  list-style: none;
+  margin: 0 -4px;
+  padding: 0 4px 6px;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+}
+
+.forecast-strip li {
+  flex: 0 0 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px;
+  border-radius: 10px;
+  background: var(--inset);
+  scroll-snap-align: start;
+}
+
+.forecast-strip li:first-child {
+  background: var(--accent-soft);
+}
+
+.fc-hour {
+  font-size: 0.68rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.fc-temp {
+  font-family: var(--font-display);
+  font-weight: 600;
+}
+
+.fc-rain {
+  font-size: 0.66rem;
+  font-family: var(--font-mono);
+  color: #3f9fb3;
+}
+
+.fc-rain.none {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
 /* ---------- NWS warnings ---------- */
 .severity-counts {
   display: flex;
@@ -982,15 +1245,16 @@ button {
   font-family: var(--font-mono);
 }
 
-.show-all {
-  margin-top: 10px;
-}
 
 /* ---------- Stations ---------- */
 .station-list {
   list-style: none;
   margin: 0 -8px;
   padding: 0;
+  max-height: 480px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .station-row {
@@ -1145,8 +1409,9 @@ button {
 }
 
 .credits {
+  padding: 0 24px 12px;
   color: var(--muted);
-  font-size: 0.74rem;
+  font-size: 0.72rem;
   text-align: center;
 }
 
@@ -1333,6 +1598,68 @@ button {
 .tone-delayed { --dot: var(--delayed); }
 .tone-info { --dot: var(--info); }
 .tone-healthy { --dot: var(--normal); }
+
+/* ---------- Desktop: the page fits the window ----------
+   All three columns stretch to the same height and end on the same line.
+   The last card in each column takes the leftover space and scrolls inside
+   itself, so nothing hangs lower than its neighbours. */
+@media (min-width: 1201px) {
+  .app {
+    height: 100vh;
+    min-height: 760px;
+  }
+
+  .layout {
+    min-height: 0;
+    gap: 16px;
+    align-items: stretch;
+  }
+
+  .col {
+    min-height: 0;
+  }
+
+  /* Left: stats on top, the station list fills the rest. */
+  .stations-panel {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .stations-panel .station-list {
+    flex: 1 1 0;
+    max-height: none;
+  }
+
+  /* Centre: globe fills the space above the replay bar. */
+  .col-center .globe-panel {
+    flex: 1 1 0;
+    height: auto;
+    min-height: 0;
+  }
+
+  /* Right: details at their natural height (scrolling if very tall), the
+     alerts panel takes the rest and keeps at least 260 px. */
+  .detail-panel {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: thin;
+  }
+
+  .alerts {
+    flex: 1 1 260px;
+    min-height: 260px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .alerts .panel-scroll {
+    flex: 1 1 0;
+    max-height: none;
+  }
+}
 
 /* ---------- Narrower screens ----------
    Tablet: globe across the top, the two side columns side by side below.

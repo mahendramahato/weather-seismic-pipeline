@@ -1,13 +1,15 @@
 import functools
 import glob
+import json
 import os
 import time
+import urllib.request
 from datetime import datetime, timedelta, timezone
 
 import boto3
 import duckdb
 import threading
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Path, Query
 
 # --- Configuration ---
 # Lake location (env var so the container can point elsewhere) and the Athena
@@ -154,6 +156,22 @@ def athena_query(sql, params=None):
     return rows
 
 
+# Observation fields the producer added in Nov 2026. Files written before
+# then don't have them, so each is selected only if the lake has it yet
+# (NULL otherwise) — naming a column no file has would fail the query.
+EXTRA_WEATHER_FIELDS = [
+    "dewpoint_c", "feels_like_c", "wind_direction_deg", "wind_gust_kmh",
+    "pressure_hpa", "visibility_km", "precip_last_hour_mm", "cloud_cover",
+]
+
+
+def extra_weather_select():
+    columns = weather_columns()
+    return ", ".join(
+        name if name in columns else f"NULL AS {name}" for name in EXTRA_WEATHER_FIELDS
+    )
+
+
 # --- Live data (DuckDB, cached 30 s) ---
 @ttl_cache(30)
 def live_stations():
@@ -161,6 +179,7 @@ def live_stations():
         SELECT station_id, lat, lon, temperature_c, description,
                round(humidity_pct) AS humidity_pct,
                round(wind_speed_kmh) AS wind_speed_kmh,
+               {extra_weather_select()},
                strftime(observed_at, '%Y-%m-%dT%H:%M:%SZ') AS observed_at,
                round(z_score, 1) AS z_score,
                CASE WHEN z_score IS NULL THEN 'unscored'
@@ -410,10 +429,63 @@ def active_nws_alerts():
     """, [hours_ago(0)])
 
 
+# --- Hourly forecast (straight from NWS, cached 30 min) ---
+# Forecasts aren't part of the lake: the dashboard only ever needs the latest
+# one, so the API asks NWS directly. NWS needs two calls: /points maps a
+# location to its forecast grid (fixed, so remembered forever), then that
+# grid's hourly forecast. units=si gives °C and km/h.
+NWS_HEADERS = {
+    "User-Agent": "weather-seismic-pipeline dashboard (mahendramahato33@gmail.com)",
+    "Accept": "application/geo+json",
+}
+FORECAST_HOURS = 24
+_forecast_urls = {}
+
+
+def nws_get(url):
+    request = urllib.request.Request(url, headers=NWS_HEADERS)
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.load(response)
+
+
+@ttl_cache(1800)
+def hourly_forecast(station_id):
+    station = next((s for s in live_stations() if s["station_id"] == station_id), None)
+    if station is None:
+        return None
+    if station_id not in _forecast_urls:
+        point = nws_get(f"https://api.weather.gov/points/{station['lat']:.4f},{station['lon']:.4f}")
+        _forecast_urls[station_id] = point["properties"]["forecastHourly"]
+    periods = nws_get(f"{_forecast_urls[station_id]}?units=si")["properties"]["periods"]
+    return [
+        {
+            # Station-local time with its offset, e.g. 2026-11-01T13:00:00-07:00.
+            "time": p["startTime"],
+            "temperature_c": p["temperature"],
+            "precip_pct": (p.get("probabilityOfPrecipitation") or {}).get("value"),
+            "wind": f"{p.get('windSpeed', '')} {p.get('windDirection', '')}".strip(),
+            "summary": p["shortForecast"],
+            "is_day": p["isDaytime"],
+        }
+        for p in periods[:FORECAST_HOURS]
+    ]
+
+
 # --- Endpoints ---
 @app.get("/api/stations")
 def stations():
     return live_stations()
+
+
+@app.get("/api/forecast/{station_id}")
+def forecast(station_id: str = Path(pattern=r"^[A-Z0-9]{3,5}$")):
+    try:
+        periods = hourly_forecast(station_id)
+    except Exception as exc:  # NWS down or slow: say so instead of a bare 500
+        raise HTTPException(status_code=502, detail="NWS forecast unavailable") from exc
+    if periods is None:
+        raise HTTPException(status_code=404, detail="Unknown station")
+    return periods
 
 
 @app.get("/api/quakes")
