@@ -18,7 +18,7 @@ function describe(alert) {
     const match = /^M([\d.]+)\s+(.*)$/.exec(alert.detail)
     return {
       badge: match ? `M${match[1]}` : 'Quake',
-      color: match ? magnitudeColor(Number(match[1])) : '#ef4444',
+      color: match ? magnitudeColor(Number(match[1])) : '#d63f3f',
       title: match ? match[2] : alert.detail,
       subtitle: 'Earthquake',
     }
@@ -30,7 +30,8 @@ function describe(alert) {
   const warmer = match && Number(match[3]) > 0
   return {
     badge: match ? `${Math.round(Number(match[2]))}°` : '!',
-    color: !match ? '#f43f5e' : warmer ? '#f97316' : '#3b82f6',
+    // Warm anomalies in amber, cold ones in a cool slate-teal.
+    color: !match ? '#c93c72' : warmer ? '#e0712f' : '#3f8fa6',
     title: match ? `${name}: ${warmer ? 'warmer' : 'colder'} than usual` : `${name}: unusual temperature`,
     subtitle: match ? `Weather anomaly · z ${match[3]}` : 'Weather anomaly',
   }
@@ -101,7 +102,7 @@ export default function AlertsFeed() {
           const { badge, color, title, subtitle } = describe(a)
           return (
             <li key={`${a.source}-${a.id}-${a.event_time}`} className={a.source}>
-              <span className="alert-badge" style={{ background: color }}>
+              <span className="alert-badge" style={{ '--badge': color }}>
                 {badge}
               </span>
               <span className="alert-text">

@@ -1,8 +1,15 @@
-import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import AlertsFeed from './components/AlertsFeed.jsx'
+import PipelineView from './components/PipelineView.jsx'
+import QuakeDetail from './components/QuakeDetail.jsx'
 import StationList from './components/StationList.jsx'
+import StatsGrid from './components/StatsGrid.jsx'
+import TimeScrubber from './components/TimeScrubber.jsx'
 import { getJson, timeAgo } from './lib/format.js'
+import { largest, latestSignificant, magnitudeColor } from './lib/quakes.js'
 import { useDayTheme } from './lib/useDayTheme.js'
+import { useHashView } from './lib/useHashView.js'
+import { WINDOWS } from './lib/windows.js'
 
 // The 3D globe (three.js) is most of the JavaScript: load it as a separate
 // file so the rest of the page shows immediately.
@@ -34,33 +41,48 @@ function MoonIcon() {
   )
 }
 
+function BrandMark() {
+  return (
+    <svg className="brand-mark" width="30" height="30" viewBox="0 0 28 28" aria-hidden="true">
+      <circle cx="14" cy="14" r="11" fill="none" stroke="var(--accent)" strokeWidth="2" />
+      <path
+        d="M3 14 h5 l3 -6 l4 12 l3 -6 h7"
+        fill="none"
+        stroke="#e0712f"
+        strokeWidth="2"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
 export default function App() {
   const theme = useDayTheme()
-  const [stations, setStations] = useState([])
-  const [quakes, setQuakes] = useState([])
-  const [history, setHistory] = useState([])
-  const [health, setHealth] = useState({})
-  // When the data was last fetched — staleness is judged against this, not
-  // against the clock during rendering (rendering must not depend on "now").
-  const [fetchedAt, setFetchedAt] = useState(null)
-  const [selectedId, setSelectedId] = useState(null)
-  const [error, setError] = useState(null)
+  const view = useHashView()
 
-  // Load everything in parallel now, then every minute; stop on unmount.
+  // Stations, sparkline history and freshness: refreshed every minute.
+  const [live, setLive] = useState({ stations: [], history: [], health: {}, fetchedAt: null })
+  // Quakes for the chosen window (24 h or 7 days), with when they were fetched.
+  const [windowKey, setWindowKey] = useState('day')
+  const [quakeData, setQuakeData] = useState({ quakes: [], fetchedAt: null })
+  const [selectedStationId, setSelectedStationId] = useState(null)
+  const [selectedQuakeId, setSelectedQuakeId] = useState(null)
+  // Replay time in ms; null = live (show everything).
+  const [cursor, setCursor] = useState(null)
+  const [error, setError] = useState(null)
+  // Significant quakes already seen, so a NEW one can be flown to.
+  const seenSignificant = useRef(null)
+
   useEffect(() => {
     async function load() {
       try {
-        const [s, q, h, hl] = await Promise.all([
+        const [stations, history, health] = await Promise.all([
           getJson('/api/stations'),
-          getJson('/api/quakes?hours=24'),
           getJson('/api/weather/history?hours=24'),
           getJson('/api/health'),
         ])
-        setStations(s)
-        setQuakes(q)
-        setHistory(h)
-        setHealth(hl)
-        setFetchedAt(Date.now())
+        setLive({ stations, history, health, fetchedAt: Date.now() })
         setError(null)
       } catch (err) {
         setError(err.message)
@@ -71,30 +93,83 @@ export default function App() {
     return () => clearInterval(timer)
   }, [])
 
+  // Quakes reload when the window changes and every minute. A slow reply for
+  // a window the user already left is ignored.
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const quakes = await getJson(`/api/quakes?hours=${WINDOWS[windowKey].hours}`)
+        if (cancelled) return
+        // A significant quake we haven't seen before (not on the first load):
+        // select it, which flies the globe there.
+        const seen = seenSignificant.current
+        if (seen) {
+          const fresh = quakes.find((q) => q.is_significant && !seen.has(q.event_id))
+          if (fresh) setSelectedQuakeId(fresh.event_id)
+        }
+        seenSignificant.current = new Set(quakes.filter((q) => q.is_significant).map((q) => q.event_id))
+        setQuakeData({ quakes, fetchedAt: Date.now() })
+      } catch (err) {
+        if (!cancelled) setError(err.message)
+      }
+    }
+    load()
+    const timer = setInterval(load, REFRESH_MS)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [windowKey])
+
+  const changeWindow = useCallback((key) => {
+    seenSignificant.current = null // a new window isn't "new quakes"
+    setCursor(null)
+    setWindowKey(key)
+  }, [])
+
   // Group the flat history rows by station for the sparklines.
   const historyByStation = useMemo(() => {
     const groups = {}
-    history.forEach((row) => (groups[row.station_id] ??= []).push(row))
+    live.history.forEach((row) => (groups[row.station_id] ??= []).push(row))
     return groups
-  }, [history])
+  }, [live.history])
 
-  // Headline numbers for the overlay on the globe.
-  const largest = quakes.reduce((best, q) => (!best || q.magnitude > best.magnitude ? q : best), null)
-  const significantCount = quakes.filter((q) => q.is_significant).length
-  const anomalyCount = stations.filter((s) => s.status === 'anomaly').length
-  const isStale = !health.weather || fetchedAt - Date.parse(health.weather) > STALE_AFTER_MS
+  const { quakes } = quakeData
+  // While replaying, only quakes up to the replay time are shown.
+  const visibleQuakes = useMemo(
+    () => (cursor === null ? quakes : quakes.filter((q) => Date.parse(q.event_time) <= cursor)),
+    [quakes, cursor],
+  )
+
+  const selectedQuake = visibleQuakes.find((q) => q.event_id === selectedQuakeId) ?? null
+  const spotlight = latestSignificant(visibleQuakes)
+  const fallbackQuake = spotlight ?? largest(visibleQuakes)
+  const detailQuake = selectedQuake ?? fallbackQuake
+  const detailLabel = selectedQuake ? 'Selected quake' : spotlight ? 'Latest significant' : 'Largest quake'
+
+  const isStale = !live.health.weather || live.fetchedAt - Date.parse(live.health.weather) > STALE_AFTER_MS
 
   return (
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <span className="brand-mark" aria-hidden="true" />
+          <BrandMark />
           <h1>Weather &amp; Seismic Monitor</h1>
         </div>
+        <nav className="view-tabs" aria-label="Views">
+          <a href="#/" aria-current={view === 'globe' ? 'page' : undefined}>
+            Globe
+          </a>
+          <a href="#/pipeline" aria-current={view === 'pipeline' ? 'page' : undefined}>
+            Pipeline
+          </a>
+        </nav>
+        <div className="spacer" />
         <div className="topbar-meta">
           <span className={`live-badge${isStale ? ' stale' : ''}`}>
             <span className="live-dot" aria-hidden="true" />
-            {isStale ? 'Delayed' : 'Live'} · updated {timeAgo(health.weather)}
+            {isStale ? 'Delayed' : 'Live'} · updated {timeAgo(live.health.weather)}
           </span>
           <span className="theme-badge" title="Light by day, dark by night (your local time)">
             {theme === 'dark' ? <MoonIcon /> : <SunIcon />}
@@ -105,62 +180,85 @@ export default function App() {
 
       {error && <div className="error-bar">Could not load data: {error}</div>}
 
-      <main className="layout">
-        <section className="globe-panel" aria-label="Globe of stations and earthquakes">
-          <Suspense fallback={<div className="globe-loading">Loading globe…</div>}>
-            <EarthGlobe
-              stations={stations}
-              quakes={quakes}
-              selectedId={selectedId}
-              onSelectStation={setSelectedId}
-              theme={theme}
+      {view === 'pipeline' ? (
+        <PipelineView />
+      ) : (
+        <main className="layout">
+          <section className="col col-left" aria-label="Summary and stations">
+            <StatsGrid quakes={visibleQuakes} stations={live.stations} windowLabel={WINDOWS[windowKey].label} />
+            <StationList
+              stations={live.stations}
+              historyByStation={historyByStation}
+              selectedId={selectedStationId}
+              onSelect={setSelectedStationId}
             />
-          </Suspense>
+          </section>
 
-          <div className="stats">
-            <div className="stat">
-              <span className="stat-value">{quakes.length}</span>
-              <span className="stat-label">quakes · 24 h</span>
+          <section className="col col-center" aria-label="Globe of stations and earthquakes">
+            <div className="globe-panel">
+              <Suspense fallback={<div className="globe-loading">Loading globe…</div>}>
+                <EarthGlobe
+                  stations={live.stations}
+                  quakes={visibleQuakes}
+                  selectedStationId={selectedStationId}
+                  selectedQuakeId={selectedQuakeId}
+                  onSelectStation={setSelectedStationId}
+                  onSelectQuake={setSelectedQuakeId}
+                  theme={theme}
+                />
+              </Suspense>
+
+              {spotlight && (
+                <button
+                  type="button"
+                  className="callout"
+                  style={{ '--tone': magnitudeColor(spotlight.magnitude) }}
+                  onClick={() => setSelectedQuakeId(spotlight.event_id)}
+                >
+                  <span className="callout-kicker">
+                    <span className="live-dot" aria-hidden="true" />
+                    Latest significant quake
+                  </span>
+                  <span className="callout-title">
+                    M{spotlight.magnitude} · {spotlight.place}
+                  </span>
+                  <span className="callout-sub">
+                    {timeAgo(spotlight.event_time)} · {Math.round(spotlight.depth_km ?? 0)} km deep
+                  </span>
+                </button>
+              )}
+
+              <div className="legend">
+                <span><i className="lg-small" /> M &lt; 2.5</span>
+                <span><i className="lg-mid" /> M 2.5–4.5</span>
+                <span><i className="lg-sig" /> M 4.5+</span>
+                <span><i className="lg-normal" /> Normal</span>
+                <span><i className="lg-anomaly" /> Anomaly</span>
+                <span><i className="lg-unscored" /> Calibrating</span>
+              </div>
             </div>
-            <div className="stat">
-              <span className="stat-value">{largest ? `M${largest.magnitude}` : '–'}</span>
-              <span className="stat-label">{largest ? largest.place : 'largest quake'}</span>
-            </div>
-            <div className="stat">
-              <span className="stat-value">{significantCount}</span>
-              <span className="stat-label">M4.5+ significant</span>
-            </div>
-            <div className="stat">
-              <span className="stat-value">{anomalyCount}</span>
-              <span className="stat-label">weather anomalies now</span>
-            </div>
-          </div>
 
-          <div className="legend">
-            <span><i className="lg-quake" /> Earthquake</span>
-            <span><i className="lg-sig" /> M4.5+ (pulsing)</span>
-            <span><i className="lg-normal" /> Normal</span>
-            <span><i className="lg-anomaly" /> Anomaly</span>
-            <span><i className="lg-unscored" /> Calibrating</span>
-          </div>
-        </section>
+            <TimeScrubber
+              quakes={quakes}
+              windowKey={windowKey}
+              now={quakeData.fetchedAt}
+              cursor={cursor}
+              onCursor={setCursor}
+              onWindow={changeWindow}
+            />
+          </section>
 
-        <aside className="sidebar">
-          {/* Alerts first, so they're visible without scrolling. */}
-          <AlertsFeed />
-
-          <StationList
-            stations={stations}
-            historyByStation={historyByStation}
-            selectedId={selectedId}
-            onSelect={setSelectedId}
-          />
-
-          <footer className="credits">
-            Data: NOAA weather.gov &amp; USGS · Imagery: NASA
-          </footer>
-        </aside>
-      </main>
+          <aside className="col col-right" aria-label="Quake details and alerts">
+            <QuakeDetail
+              quake={detailQuake}
+              label={detailLabel}
+              onClose={selectedQuake ? () => setSelectedQuakeId(null) : null}
+            />
+            <AlertsFeed />
+            <footer className="credits">Data: NOAA weather.gov &amp; USGS · Imagery: NASA</footer>
+          </aside>
+        </main>
+      )}
     </div>
   )
 }

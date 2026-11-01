@@ -124,13 +124,16 @@ def hours_ago(hours):
 # Start a query, poll until it finishes, then read the result rows. Athena
 # returns every value as text; the first row is the column names. Parameter
 # values must be SQL literals, hence the quotes around each date string.
-def athena_query(sql, params):
-    query_id = athena.start_query_execution(
-        QueryString=sql,
-        WorkGroup=ATHENA_WORKGROUP,
-        QueryExecutionContext={"Database": ATHENA_DATABASE},
-        ExecutionParameters=[f"'{p}'" for p in params],
-    )["QueryExecutionId"]
+def athena_query(sql, params=None):
+    options = {
+        "QueryString": sql,
+        "WorkGroup": ATHENA_WORKGROUP,
+        "QueryExecutionContext": {"Database": ATHENA_DATABASE},
+    }
+    # Athena rejects an empty parameter list, so only send one when needed.
+    if params:
+        options["ExecutionParameters"] = [f"'{p}'" for p in params]
+    query_id = athena.start_query_execution(**options)["QueryExecutionId"]
 
     while True:
         status = athena.get_query_execution(QueryExecutionId=query_id)["QueryExecution"]["Status"]
@@ -281,6 +284,93 @@ def curated_alerts(first_day, last_day):
     return [{**r, "lat": float(r["lat"]), "lon": float(r["lon"])} for r in rows]
 
 
+# --- Pipeline status (for the dashboard's Pipeline page) ---
+# A health picture built only from what the API can see itself: how recently
+# each stream wrote a file to the lake, how far the curated (Athena) tables
+# reach, and this process's own memory. Stage health on the page is inferred
+# from these, not read from Kafka or Airflow directly.
+STREAM_HEALTHY_MIN = 15    # a Spark micro-batch writes every minute or so
+STREAM_DELAYED_MIN = 120   # past this, treat the stream as down
+
+
+def stream_status(age_minutes):
+    if age_minutes is None or age_minutes > STREAM_DELAYED_MIN:
+        return "down"
+    if age_minutes > STREAM_HEALTHY_MIN:
+        return "delayed"
+    return "healthy"
+
+
+# Newest file and today's file count for one dataset. Only today's and
+# yesterday's folders are looked at, so this stays cheap as the lake grows.
+@ttl_cache(30)
+def stream_freshness(dataset):
+    now = datetime.now(timezone.utc)
+    root = f"{LAKE_DIR}/{dataset}"
+    today_files = glob.glob(f"{root}/date={now.date().isoformat()}/*.parquet")
+    yesterday = (now.date() - timedelta(days=1)).isoformat()
+    newest = None
+    for path in today_files + glob.glob(f"{root}/date={yesterday}/*.parquet"):
+        try:
+            newest = max(newest or 0, os.path.getmtime(path))
+        except OSError:
+            continue  # file vanished between listing and reading its time
+    age = None if newest is None else round((now.timestamp() - newest) / 60, 1)
+    return {
+        "newest_file": None if newest is None
+        else datetime.fromtimestamp(newest, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "age_minutes": age,
+        "files_today": len(today_files),
+        "status": stream_status(age),
+    }
+
+
+# The last day each curated table holds. Cached 10 minutes; a failure (no AWS
+# access, Athena down) is cached too, as None, so it can't slow every request.
+@ttl_cache(600)
+def curated_freshness():
+    try:
+        rows = athena_query("""
+            SELECT (SELECT max(date) FROM curated_weather) AS weather,
+                   (SELECT max(date) FROM curated_seismic) AS seismic
+        """)
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def curated_status(tables, expected):
+    if not tables or not all(tables.values()):
+        return "unknown"
+    oldest = min(str(v)[:10] for v in tables.values())
+    one_day_late = (datetime.fromisoformat(expected) - timedelta(days=1)).date().isoformat()
+    if oldest >= expected:
+        return "healthy"
+    if oldest >= one_day_late:
+        return "delayed"
+    return "down"
+
+
+# This process's memory and its container's limit (Linux only; None elsewhere).
+def api_memory():
+    used_mb = limit_mb = None
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    used_mb = round(int(line.split()[1]) / 1024)
+    except OSError:
+        pass
+    try:
+        with open("/sys/fs/cgroup/memory.max") as f:
+            value = f.read().strip()
+        if value != "max":
+            limit_mb = round(int(value) / 1048576)
+    except (OSError, ValueError):
+        pass
+    return {"memory_mb": used_mb, "memory_limit_mb": limit_mb}
+
+
 # --- Endpoints ---
 @app.get("/api/stations")
 def stations():
@@ -315,6 +405,24 @@ def alerts_week():
     recent = live_alerts(48)
     merged = {(a["source"], a["id"], a["event_time"]): a for a in older + recent}
     return sorted(merged.values(), key=lambda a: a["event_time"], reverse=True)
+
+
+@app.get("/api/pipeline")
+def pipeline():
+    now = datetime.now(timezone.utc)
+    # The 00:30 UTC run curates the previous day; give it an hour to finish.
+    expected = ((now - timedelta(hours=1, minutes=30)).date() - timedelta(days=1)).isoformat()
+    tables = curated_freshness()
+    return {
+        "checked_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "streams": {name: stream_freshness(name) for name in ("weather", "seismic")},
+        "curated": {
+            "tables": tables,
+            "expected": expected,
+            "status": curated_status(tables, expected),
+        },
+        "api": api_memory(),
+    }
 
 
 @app.get("/api/health")

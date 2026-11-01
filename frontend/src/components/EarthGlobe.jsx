@@ -3,7 +3,7 @@ import Globe from 'react-globe.gl'
 import * as THREE from 'three'
 import { escapeHtml, timeAgo } from '../lib/format.js'
 import { STATION_NAMES } from '../lib/stations.js'
-import { magnitudeColor } from '../lib/quakes.js'
+import { magnitudeColor, withAlpha } from '../lib/quakes.js'
 import { subsolarPoint } from '../lib/sun.js'
 
 // --- Day/night globe shader ---
@@ -45,6 +45,12 @@ const fragmentShader = `
   }
 `
 
+// Where the globe starts, and where "Reset view" returns to: North America.
+const HOME_VIEW = { lat: 32, lng: -98, altitude: 2.1 }
+
+// Atmosphere glow per theme: sea-glass by day, teal at night.
+const ATMOSPHERE = { light: '#8fd3c3', dark: '#5ccfb9' }
+
 // A station marker: a small glowing dot in its status colour. The name and
 // temperature appear on hover (and stay visible when selected), so 15
 // stations never pile their labels on top of each other.
@@ -61,17 +67,33 @@ function stationPin(station, selected, onSelect) {
   return pin
 }
 
-export default function EarthGlobe({ stations, quakes, selectedId, onSelectStation, theme }) {
+// Ripples: every M3+ quake, plus whichever one is selected. Bigger quakes
+// spread further and more slowly, so a strong one is obvious at a glance.
+function rippleQuakes(quakes, selectedQuakeId) {
+  return quakes.filter((q) => q.magnitude >= 3 || q.event_id === selectedQuakeId)
+}
+
+export default function EarthGlobe({
+  stations,
+  quakes,
+  selectedStationId,
+  selectedQuakeId,
+  onSelectStation,
+  onSelectQuake,
+  theme,
+}) {
   const globeRef = useRef()
   const containerRef = useRef()
   const stationsRef = useRef(stations)
+  const quakesRef = useRef(quakes)
   const [size, setSize] = useState({ width: 0, height: 0 })
 
-  // Latest stations for the fly-to effect below, without re-flying every time
+  // Latest data for the fly-to effects below, without re-flying every time
   // the data refreshes.
   useEffect(() => {
     stationsRef.current = stations
-  }, [stations])
+    quakesRef.current = quakes
+  }, [stations, quakes])
 
   // The globe material: created once; only the sun position changes later.
   const material = useMemo(() => {
@@ -105,25 +127,53 @@ export default function EarthGlobe({ stations, quakes, selectedId, onSelectStati
     return () => observer.disconnect()
   }, [])
 
-  // Start over North America and turn slowly until someone picks a station.
+  // Start over North America and turn slowly until someone picks something.
   function handleGlobeReady() {
     const globe = globeRef.current
-    globe.pointOfView({ lat: 32, lng: -98, altitude: 2.1 })
+    // Pull back further on narrow screens so the whole globe fits.
+    globe.pointOfView({ ...HOME_VIEW, altitude: size.width < 600 ? 2.9 : HOME_VIEW.altitude })
     const controls = globe.controls()
     controls.autoRotate = true
     controls.autoRotateSpeed = 0.3
   }
 
-  // Fly to a station when it's selected (from a card or a pin).
-  useEffect(() => {
-    const station = stationsRef.current.find((s) => s.station_id === selectedId)
+  function flyTo(lat, lng, altitude) {
     const globe = globeRef.current
-    if (!station || !globe) return
+    if (!globe) return
     globe.controls().autoRotate = false
-    globe.pointOfView({ lat: station.lat, lng: station.lon, altitude: 1.3 }, 1200)
-  }, [selectedId])
+    globe.pointOfView({ lat, lng, altitude }, 1200)
+  }
 
-  const significant = quakes.filter((q) => q.is_significant)
+  // Fly to a station or a quake when it's selected (from a list, a pin or a
+  // new significant quake arriving).
+  useEffect(() => {
+    const station = stationsRef.current.find((s) => s.station_id === selectedStationId)
+    if (station) flyTo(station.lat, station.lon, 1.3)
+  }, [selectedStationId])
+
+  useEffect(() => {
+    const quake = quakesRef.current.find((q) => q.event_id === selectedQuakeId)
+    if (quake) flyTo(quake.lat, quake.lon, 1.5)
+  }, [selectedQuakeId])
+
+  // --- Controls overlay ---
+  function zoom(factor) {
+    const globe = globeRef.current
+    if (!globe) return
+    const view = globe.pointOfView()
+    globe.pointOfView({ ...view, altitude: Math.min(Math.max(view.altitude * factor, 0.5), 4) }, 400)
+  }
+
+  function resetView() {
+    const globe = globeRef.current
+    if (!globe) return
+    globe.pointOfView(HOME_VIEW, 900)
+  }
+
+  function toggleRotation() {
+    const controls = globeRef.current?.controls()
+    if (controls) controls.autoRotate = !controls.autoRotate
+  }
 
   return (
     <div ref={containerRef} className="globe-wrap">
@@ -135,33 +185,38 @@ export default function EarthGlobe({ stations, quakes, selectedId, onSelectStati
           onGlobeReady={handleGlobeReady}
           globeMaterial={material}
           backgroundColor="rgba(0,0,0,0)"
-          atmosphereColor={theme === 'dark' ? '#6fb3ff' : '#8fc4ff'}
-          atmosphereAltitude={0.2}
-          // Quakes: flat dots, bigger and redder with magnitude.
+          atmosphereColor={ATMOSPHERE[theme] ?? ATMOSPHERE.light}
+          atmosphereAltitude={0.22}
+          // Quakes: short columns, taller and redder with magnitude; click
+          // one for its details.
           pointsData={quakes}
           pointLat="lat"
           pointLng="lon"
-          pointAltitude={0.004}
-          pointRadius={(q) => 0.1 + Math.max(q.magnitude, 0) * 0.07}
+          pointAltitude={(q) => 0.006 + Math.max(q.magnitude, 0) * 0.006 + (q.event_id === selectedQuakeId ? 0.04 : 0)}
+          pointRadius={(q) => 0.12 + Math.max(q.magnitude, 0) * 0.07}
           pointColor={(q) => magnitudeColor(q.magnitude)}
           pointResolution={16}
           pointLabel={(q) =>
-            `<div class="globe-tip"><b>M${q.magnitude}</b> ${escapeHtml(q.place)}<br/>${timeAgo(q.event_time)}</div>`
+            `<div class="globe-tip"><b>M${q.magnitude}</b> ${escapeHtml(q.place)}<br/>${timeAgo(q.event_time)} · ${Math.round(q.depth_km ?? 0)} km deep</div>`
           }
-          // Significant quakes (M4.5+) also send out pulsing rings.
-          ringsData={significant}
+          onPointClick={(q) => onSelectQuake(q.event_id)}
+          // Ripples spreading out from each M3+ quake.
+          ringsData={rippleQuakes(quakes, selectedQuakeId)}
           ringLat="lat"
           ringLng="lon"
-          ringColor={() => (t) => `rgba(239, 68, 68, ${1 - t})`}
-          ringMaxRadius={(q) => q.magnitude * 1.3}
-          ringPropagationSpeed={2.2}
-          ringRepeatPeriod={1500}
+          ringColor={(q) => {
+            const color = magnitudeColor(q.magnitude)
+            return (t) => withAlpha(color, 1 - t)
+          }}
+          ringMaxRadius={(q) => Math.max(q.magnitude, 1) * 1.4}
+          ringPropagationSpeed={(q) => 1 + Math.max(q.magnitude, 1) * 0.35}
+          ringRepeatPeriod={(q) => 700 + Math.max(q.magnitude, 1) * 260}
           // Stations: clickable dots with hover labels.
           htmlElementsData={stations}
           htmlLat="lat"
           htmlLng="lon"
           htmlAltitude={0.02}
-          htmlElement={(s) => stationPin(s, s.station_id === selectedId, onSelectStation)}
+          htmlElement={(s) => stationPin(s, s.station_id === selectedStationId, onSelectStation)}
           // Hide pins for stations on the far side of the globe.
           htmlElementVisibilityModifier={(el, isVisible) => {
             el.style.opacity = isVisible ? 1 : 0
@@ -169,6 +224,31 @@ export default function EarthGlobe({ stations, quakes, selectedId, onSelectStati
           }}
         />
       )}
+
+      <div className="globe-controls">
+        <button type="button" className="icon-btn" aria-label="Zoom in" onClick={() => zoom(0.7)}>
+          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+            <path d="M9 3v12M3 9h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        </button>
+        <button type="button" className="icon-btn" aria-label="Zoom out" onClick={() => zoom(1.4)}>
+          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+            <path d="M3 9h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        </button>
+        <button type="button" className="icon-btn" aria-label="Reset view" onClick={resetView}>
+          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+            <circle cx="9" cy="9" r="5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+            <path d="M9 1v3M9 14v3M1 9h3M14 9h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+        </button>
+        <button type="button" className="icon-btn" aria-label="Start or stop rotation" onClick={toggleRotation}>
+          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+            <path d="M15 9a6 6 0 1 1-2-4.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            <path d="M13.5 1.5v3.5H10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      </div>
     </div>
   )
 }

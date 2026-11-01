@@ -36,3 +36,24 @@ export function escapeHtml(text) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
 }
+
+// UTC clock text for the replay and quake details, e.g. "Sun 1 Nov · 12:38 UTC".
+// The pipeline runs on UTC, so times are shown in UTC everywhere.
+const UTC_DAY = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })
+const UTC_TIME = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' })
+
+export function formatUtc(time, { withDay = true } = {}) {
+  const date = new Date(time)
+  const clock = `${UTC_TIME.format(date)} UTC`
+  return withDay ? `${UTC_DAY.format(date).replace(',', '')} · ${clock}` : clock
+}
+
+// "2026-10-31" -> "Oct 31".
+export function formatDay(isoDay) {
+  if (!isoDay) return '–'
+  return new Date(`${String(isoDay).slice(0, 10)}T00:00:00Z`).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  })
+}

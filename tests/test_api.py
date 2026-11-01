@@ -110,3 +110,26 @@ def test_history_band_matches_the_detector(client):
 def test_health_reports_both_datasets(client):
     health = client.get("/api/health").json()
     assert set(health) == {"weather", "seismic"}
+
+
+def test_pipeline_reports_stream_and_curated_status(client, monkeypatch):
+    import main
+
+    # No AWS in tests: pretend Athena is unreachable.
+    monkeypatch.setattr(main, "curated_freshness", lambda: None)
+    body = client.get("/api/pipeline").json()
+    assert set(body["streams"]) == {"weather", "seismic"}
+    # The test lake was written moments ago, so both streams look fresh.
+    assert body["streams"]["weather"]["status"] == "healthy"
+    assert body["streams"]["seismic"]["age_minutes"] < 15
+    assert body["curated"]["status"] == "unknown"
+
+
+def test_curated_status_compares_against_expected_day():
+    import main
+
+    tables = {"weather": "2026-10-31", "seismic": "2026-10-31"}
+    assert main.curated_status(tables, "2026-10-31") == "healthy"
+    assert main.curated_status(tables, "2026-11-01") == "delayed"
+    assert main.curated_status(tables, "2026-11-05") == "down"
+    assert main.curated_status(None, "2026-11-01") == "unknown"
