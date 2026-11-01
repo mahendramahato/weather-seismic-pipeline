@@ -197,3 +197,40 @@ def test_forecast_reshapes_the_nws_hourly_periods(client, monkeypatch):
     }
     assert client.get("/api/forecast/KZZZ").status_code == 404
     assert client.get("/api/forecast/bad!").status_code == 422
+
+
+def test_slow_fields_are_filled_from_the_last_full_report(tmp_path, monkeypatch):
+    """A special report without pressure/clouds borrows them from the hourly
+    report before it; gusts are never borrowed."""
+    import main
+
+    lake = tmp_path / "lake"
+    lake.mkdir()
+    write_table(
+        lake / "weather",
+        [
+            "station_id VARCHAR", "observed_at TIMESTAMP", "lat DOUBLE", "lon DOUBLE",
+            "temperature_c DOUBLE", "humidity_pct DOUBLE", "wind_speed_kmh DOUBLE",
+            "description VARCHAR", "ingested_at TIMESTAMP", "z_score DOUBLE", "is_anomaly BOOLEAN",
+            "dewpoint_c DOUBLE", "feels_like_c DOUBLE", "wind_direction_deg DOUBLE",
+            "wind_gust_kmh DOUBLE", "pressure_hpa DOUBLE", "visibility_km DOUBLE",
+            "precip_last_hour_mm DOUBLE", "cloud_cover VARCHAR",
+        ],
+        [
+            # Full hourly report.
+            ("KBOI", NOW - timedelta(minutes=50), 43.6, -116.2, 12.0, 40.0, 9.0, "Cloudy", NOW, 0.5, False,
+             -1.0, None, 300.0, 30.0, 1015.0, 16.0, None, "OVC"),
+            # Special report: no dewpoint, pressure or clouds, no gust.
+            ("KBOI", NOW - timedelta(minutes=10), 43.6, -116.2, 12.5, 41.0, 8.0, "Cloudy", NOW, 0.6, False,
+             None, None, 310.0, None, None, 12.0, None, None),
+        ],
+    )
+    monkeypatch.setattr(main, "LAKE_DIR", str(lake))
+    # Skip the caches, which still hold the main test lake's answers.
+    monkeypatch.setattr(main, "weather_columns", main.weather_columns.__wrapped__)
+    station = main.live_stations.__wrapped__()[0]
+    assert station["temperature_c"] == 12.5            # the newest report
+    assert station["pressure_hpa"] == 1015.0           # borrowed
+    assert station["cloud_cover"] == "OVC"             # borrowed
+    assert station["dewpoint_c"] == -1.0               # borrowed
+    assert station["wind_gust_kmh"] is None            # never borrowed

@@ -165,30 +165,64 @@ EXTRA_WEATHER_FIELDS = [
 ]
 
 
+# NOAA stations send a full report once an hour and short "special" reports
+# in between (e.g. when visibility changes), which often leave out dewpoint,
+# pressure, visibility or clouds. These slow-changing fields are filled from
+# the station's most recent report that had them, if it's under 3 hours old.
+# Gusts, rain and wind direction are NOT filled: missing there usually means
+# none (no gusts, no rain, calm wind), and an old value would mislead.
+FILLABLE_WEATHER_FIELDS = ["dewpoint_c", "pressure_hpa", "visibility_km", "cloud_cover"]
+FILL_HOURS = 3
+
+
 def extra_weather_select():
     columns = weather_columns()
-    return ", ".join(
-        name if name in columns else f"NULL AS {name}" for name in EXTRA_WEATHER_FIELDS
-    )
+    parts = []
+    for name in EXTRA_WEATHER_FIELDS:
+        if name not in columns:
+            parts.append(f"NULL AS {name}")
+        elif name in FILLABLE_WEATHER_FIELDS:
+            parts.append(f"coalesce(latest.{name}, filled.{name}) AS {name}")
+        else:
+            parts.append(f"latest.{name} AS {name}")
+    return ", ".join(parts)
+
+
+def fill_weather_select():
+    columns = weather_columns()
+    fields = [name for name in FILLABLE_WEATHER_FIELDS if name in columns]
+    # max_by(x, t) FILTER (x IS NOT NULL) = the newest non-missing value.
+    picks = [f"max_by({name}, observed_at) FILTER (WHERE {name} IS NOT NULL) AS {name}" for name in fields]
+    return ", ".join(["station_id"] + picks)
 
 
 # --- Live data (DuckDB, cached 30 s) ---
 @ttl_cache(30)
 def live_stations():
     return query(f"""
-        SELECT station_id, lat, lon, temperature_c, description,
+        WITH readings AS (SELECT * FROM {lake('weather', 48)}),
+        latest AS (
+            SELECT * FROM readings
+            QUALIFY row_number() OVER (PARTITION BY station_id ORDER BY observed_at DESC) = 1
+        ),
+        filled AS (
+            SELECT {fill_weather_select()}
+            FROM readings
+            WHERE observed_at >= ?
+            GROUP BY station_id
+        )
+        SELECT latest.station_id, lat, lon, temperature_c, description,
                round(humidity_pct) AS humidity_pct,
                round(wind_speed_kmh) AS wind_speed_kmh,
                {extra_weather_select()},
-               strftime(observed_at, '%Y-%m-%dT%H:%M:%SZ') AS observed_at,
+               strftime(latest.observed_at, '%Y-%m-%dT%H:%M:%SZ') AS observed_at,
                round(z_score, 1) AS z_score,
                CASE WHEN z_score IS NULL THEN 'unscored'
                     WHEN is_anomaly THEN 'anomaly'
                     ELSE 'normal' END AS status
-        FROM {lake('weather', 48)}
-        QUALIFY row_number() OVER (PARTITION BY station_id ORDER BY observed_at DESC) = 1
-        ORDER BY station_id
-    """)
+        FROM latest LEFT JOIN filled USING (station_id)
+        ORDER BY latest.station_id
+    """, [hours_ago(FILL_HOURS)])
 
 
 @ttl_cache(30)

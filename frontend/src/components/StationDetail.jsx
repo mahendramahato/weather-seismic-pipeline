@@ -89,11 +89,17 @@ export default function StationDetail({ station, history, onClose }) {
         </>
       ),
     },
-    { icon: 'gust', label: 'Gusts', value: fmt(station.wind_gust_kmh, ' km/h') },
+    // NOAA only reports gusts and rain when there are some, so a missing
+    // value here means "none", not "unknown".
+    { icon: 'gust', label: 'Gusts', value: station.wind_gust_kmh ? fmt(station.wind_gust_kmh, ' km/h') : 'None' },
     { icon: 'pressure', label: 'Pressure', value: fmt(station.pressure_hpa, ' hPa') },
     { icon: 'visibility', label: 'Visibility', value: fmt(station.visibility_km, ' km', 1) },
     { icon: 'cloud', label: 'Clouds', value: CLOUD_LABELS[station.cloud_cover] ?? '–' },
-    { icon: 'precip', label: 'Rain 1 h', value: fmt(station.precip_last_hour_mm, ' mm', 1) },
+    {
+      icon: 'precip',
+      label: 'Rain 1 h',
+      value: station.precip_last_hour_mm ? fmt(station.precip_last_hour_mm, ' mm', 1) : 'None',
+    },
     {
       icon: 'thermometer',
       label: 'In °F',

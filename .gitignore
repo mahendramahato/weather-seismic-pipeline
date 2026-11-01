@@ -3,7 +3,9 @@ __pycache__/
 *.pyc
 .env
 .DS_Store
-data/
+# The pipeline's lake/checkpoints at the repo root only (a bare `data/`
+# would also hide frontend/public/data, e.g. the plate boundaries).
+/data/
 *.parquet
 
 derby.log
