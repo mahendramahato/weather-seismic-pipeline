@@ -2,12 +2,10 @@ import os
 
 from datetime import timedelta
 
-from pyspark.errors import AnalysisException
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col,
     from_json,
-    lit,
     min as spark_min,
     to_date,
 )
@@ -27,6 +25,7 @@ from detection import (
     SEASONAL_DAYS,
     add_seasonal_scores,
 )
+from history import BaselineHistory
 
 # --- Schema ---
 # The columns and types we expect inside each Kafka message. Names must match
@@ -113,35 +112,24 @@ deduped = (
 # so each reading lands in the day it was actually measured.
 with_date = deduped.withColumn("date", to_date(col("observed_at")))
 
-# --- History lookup ---
-# The lake's readings since `since` (only the columns the baseline needs).
-# Filtering on the `date` partition first means only the last ~2 weeks of
-# folders are opened, however large the lake grows.
-# Returns None on the very first batch, when the lake folder doesn't exist yet.
-def load_history(since):
-    try:
-        return (
-            spark.read.parquet(LAKE_PATH)
-            .filter(col("date") >= lit(since.date()))
-            .filter(col("observed_at") >= lit(since))
-            .select(*BASELINE_COLUMNS)
-        )
-    except AnalysisException:
-        return None
+# --- History, kept in memory ---
+# The last ~2 weeks of (station, time, temperature): loaded from the lake once,
+# then updated from each batch (see history.py for why).
+history = BaselineHistory(spark, LAKE_PATH)
 
 
 # --- Anomaly scoring for one micro-batch ---
-# Baseline candidates = the lake's last 2 weeks plus this batch itself (on a
-# replay, the whole history arrives in one batch), de-duplicated in case a
-# retried batch is already in the lake.
+# Baseline candidates = the last 2 weeks (from memory) plus this batch itself
+# (on a replay, the whole history arrives in one batch), de-duplicated in case
+# a retried batch is already in the lake.
 def score_batch(batch_df):
     oldest = batch_df.agg(spark_min("observed_at")).first()[0]
     since = oldest - timedelta(days=SEASONAL_DAYS, seconds=HOUR_WINDOW_SECONDS)
 
     readings = batch_df.select(*BASELINE_COLUMNS)
-    history = load_history(since)
-    if history is not None:
-        readings = readings.unionByName(history)
+    past = history.readings_since(since)
+    if past is not None:
+        readings = readings.unionByName(past)
     readings = readings.dropDuplicates(["station_id", "observed_at"])
 
     return add_seasonal_scores(batch_df, readings)
@@ -166,9 +154,11 @@ def process_batch(batch_df, batch_id):
     # that by then already contains this batch.
     scored = score_batch(batch_df).persist()
 
-    # Append this batch to the lake, one folder per day
+    # Append this batch to the lake, one folder per day. coalesce(1) = one
+    # file per day folder per batch, instead of one per shuffle partition
+    # (up to 4), so the lake gathers far fewer tiny files.
     (
-        scored.write
+        scored.coalesce(1).write
         .mode("append")
         .partitionBy("date")
         .parquet(LAKE_PATH)
@@ -181,6 +171,9 @@ def process_batch(batch_df, batch_id):
             f"(same-hour median {row.baseline_median:.1f}, spread {row.baseline_spread:.1f}, "
             f"{row.baseline_days} days, z = {row.z_score:.1f})"
         )
+    # The batch is in the lake now: add it to the in-memory history too.
+    history.add(batch_df.select(*BASELINE_COLUMNS).collect())
+
     # free the memory
     scored.unpersist()
     batch_df.unpersist()

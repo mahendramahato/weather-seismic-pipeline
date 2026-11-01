@@ -17,9 +17,10 @@ Mac = dev only. `git push` → on the Oracle VM: `git pull && docker compose up 
 
 ## Status (2026-11-01)
 - Fixed: Airflow scheduler outage (restarted, Oct 20–31 backfilled), API memory blowup (single-flight cache, read only recent partitions, shared DuckDB capped 1 GB, `mem_limit: 2g`)
+- Fixed: weather-stream CPU — 14-day baseline history now kept in memory (`phase2/history.py`) instead of re-reading the lake every batch; one file per batch (`coalesce(1)`); `mem_limit: 3g`
 - Done: dashboard redesign + Pipeline page; NWS alerts as a third stream (producer → Kafka `alerts` → `alerts-stream` → `data/lake/alerts`)
 
 ## Open items
-- `weather-stream` uses ~3.5 cores and rewrites state every batch (likely `dropDuplicates` without a watermark); also many tiny Parquet files
 - Run the Airflow scheduler as its own service with `restart: unless-stopped` instead of `airflow standalone`; set `AIRFLOW__CORE__PARALLELISM=4`
-- Add `mem_limit` to the other containers; VM disk is 82% full
+- Add `mem_limit` to the remaining containers; VM disk is 82% full
+- Optional: compact old weather partitions (thousands of tiny files per day before Nov 1) into one file per day

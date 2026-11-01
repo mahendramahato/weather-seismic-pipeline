@@ -169,6 +169,8 @@ services:
       - ivy-cache:/opt/ivy
     ports:
       - "127.0.0.1:4040:4040"
+    # Ceiling so a runaway batch can only restart this job, not starve the VM.
+    mem_limit: 3g
     depends_on:
       - kafka
 
