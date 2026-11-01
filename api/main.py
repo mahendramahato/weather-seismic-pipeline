@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import boto3
 import duckdb
+import threading
 from fastapi import FastAPI, Query
 
 # --- Configuration ---
@@ -34,25 +35,39 @@ app = FastAPI(title="Weather & Seismic API")
 
 
 # --- Cache helper ---
-# Remembers a function's result per argument for `seconds`. Within that window
-# repeat calls return the saved result without querying again — this caps how
-# often DuckDB/Athena run no matter how many people load the page.
+# Remembers a function's result per argument for `seconds`.
+# Single-flight: if many requests miss at the same moment, only ONE runs the
+# query; the rest wait on the lock, then return the result it just saved.
 def ttl_cache(seconds):
     def decorator(func):
         saved = {}
+        lock = threading.Lock()  # one lock per cached endpoint
 
         @functools.wraps(func)
         def wrapper(*args):
-            now = time.monotonic()
-            if args in saved and now - saved[args][0] < seconds:
-                return saved[args][1]
-            result = func(*args)
-            saved[args] = (now, result)
-            return result
+            # Fast path: a fresh result exists, so return it with no waiting.
+            entry = saved.get(args)
+            if entry and time.monotonic() - entry[0] < seconds:
+                return entry[1]
+
+            # Slow path: only one thread at a time gets past this line.
+            with lock:
+                # Re-check: while we waited, another thread may have just
+                # refreshed it. If so, use its result instead of querying again.
+                entry = saved.get(args)
+                if entry and time.monotonic() - entry[0] < seconds:
+                    return entry[1]
+
+                result = func(*args)
+                # Timestamp AFTER the query, so slow queries still get the full TTL.
+                saved[args] = (time.monotonic(), result)
+                return result
 
         return wrapper
 
     return decorator
+
+
 
 
 # --- DuckDB helpers ---
