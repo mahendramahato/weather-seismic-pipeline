@@ -1,4 +1,5 @@
 import functools
+import glob
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -12,11 +13,36 @@ from fastapi import FastAPI, Query
 # Lake location (env var so the container can point elsewhere) and the Athena
 # workgroup/database from Phase 5.
 LAKE_DIR = os.environ.get("LAKE_DIR", "data/lake")
-# union_by_name: files written before and after a detector change have
-# different baseline columns; match columns by name across all files, with
-# NULL where a file doesn't have one.
-WEATHER = f"read_parquet('{LAKE_DIR}/weather/**/*.parquet', hive_partitioning = true, union_by_name = true)"
-SEISMIC = f"read_parquet('{LAKE_DIR}/seismic/**/*.parquet', hive_partitioning = true, union_by_name = true)"
+
+
+# --- Which files to read ---
+# The lake is split into one folder per day (date=YYYY-MM-DD). Every live query
+# asks about a recent window (at most 7 days), so we hand DuckDB only those
+# days' folders. Reading `**/*.parquet` instead made every request open every
+# file the lake has ever collected (tens of thousands of small files), which
+# was slow and is what pushed the API to 13+ GB of RAM.
+def lake(dataset, hours):
+    root = f"{LAKE_DIR}/{dataset}"
+    now = datetime.now(timezone.utc)
+    # One extra day of margin: rows near midnight, or a late update to an
+    # older quake, can land in the previous day's folder.
+    first = (now - timedelta(hours=hours)).date() - timedelta(days=1)
+    days = [first + timedelta(days=i) for i in range((now.date() - first).days + 1)]
+    patterns = [
+        f"{root}/date={day.isoformat()}/*.parquet"
+        for day in days
+        if glob.glob(f"{root}/date={day.isoformat()}/*.parquet")
+    ]
+    if not patterns:
+        # Nothing recent (streaming down, or an old dev lake): use the newest
+        # day that exists so "latest reading" queries still show something.
+        newest = sorted(glob.glob(f"{root}/date=*"))[-1:]
+        patterns = [f"{folder}/*.parquet" for folder in newest] or [f"{root}/**/*.parquet"]
+    files = ", ".join(f"'{p}'" for p in patterns)
+    # union_by_name: files written before and after a detector change have
+    # different baseline columns; match columns by name across all files, with
+    # NULL where a file doesn't have one.
+    return f"read_parquet([{files}], hive_partitioning = true, union_by_name = true)"
 
 # Must match the Spark job, so the chart's shaded band is exactly the range the
 # detector treats as normal. Current detector: same-hour median ± 3.5 × robust
@@ -71,9 +97,20 @@ def ttl_cache(seconds):
 
 
 # --- DuckDB helpers ---
+# One DuckDB for the whole app, created once at startup and capped. Before,
+# every query opened a fresh DuckDB that was allowed 80% of the VM's RAM and
+# every CPU core; several at once is how the API took the whole server down.
+# With the cap, a too-big query spills to disk or fails on its own instead.
+db = duckdb.connect()
+db.execute("SET memory_limit = '1GB'")
+db.execute("SET threads = 2")
+
+
 # Runs SQL over the local lake; values go in as ? parameters, never pasted in.
+# cursor() gives each request thread its own handle on the shared, capped
+# database (one handle can't be used by two threads at once).
 def query(sql, params=None):
-    with duckdb.connect() as con:
+    with db.cursor() as con:
         cursor = con.execute(sql, params or [])
         columns = [d[0] for d in cursor.description]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -126,7 +163,7 @@ def live_stations():
                CASE WHEN z_score IS NULL THEN 'unscored'
                     WHEN is_anomaly THEN 'anomaly'
                     ELSE 'normal' END AS status
-        FROM {WEATHER}
+        FROM {lake('weather', 48)}
         QUALIFY row_number() OVER (PARTITION BY station_id ORDER BY observed_at DESC) = 1
         ORDER BY station_id
     """)
@@ -138,7 +175,7 @@ def live_quakes(hours):
         SELECT event_id,
                strftime(event_time, '%Y-%m-%dT%H:%M:%SZ') AS event_time,
                round(magnitude, 1) AS magnitude, place, lat, lon, depth_km, is_significant
-        FROM {SEISMIC}
+        FROM {lake('seismic', hours)}
         WHERE event_time >= ?
         QUALIFY row_number() OVER (PARTITION BY event_id ORDER BY updated_at DESC) = 1
         ORDER BY event_time DESC
@@ -152,7 +189,7 @@ def live_alerts(hours):
         SELECT 'weather' AS source, station_id AS id,
                strftime(observed_at, '%Y-%m-%dT%H:%M:%SZ') AS event_time, lat, lon,
                printf('%s %.1f°C (z = %.1f)', station_id, temperature_c, z_score) AS detail
-        FROM {WEATHER}
+        FROM {lake('weather', hours)}
         WHERE is_anomaly AND observed_at >= ?
 
         UNION ALL
@@ -161,7 +198,7 @@ def live_alerts(hours):
                strftime(event_time, '%Y-%m-%dT%H:%M:%SZ'), lat, lon,
                printf('M%.1f %s', magnitude, place)
         FROM (
-            SELECT * FROM {SEISMIC}
+            SELECT * FROM {lake('seismic', hours)}
             WHERE event_time >= ?
             QUALIFY row_number() OVER (PARTITION BY event_id ORDER BY updated_at DESC) = 1
         )
@@ -182,18 +219,19 @@ def live_weather_history(hours):
                round({band_edge('-')}, 2) AS band_low,
                round({band_edge('+')}, 2) AS band_high,
                is_anomaly
-        FROM {WEATHER}
+        FROM {lake('weather', hours)}
         WHERE observed_at >= ? AND temperature_c IS NOT NULL
         ORDER BY station_id, observed_at
     """, [hours_ago(hours)])
 
 
-# Which columns exist in the weather lake (refreshed every 5 minutes). Needed
+# Which columns exist in the last 7 days of the weather lake (refreshed every
+# 5 minutes; 7 days = the widest window any endpoint asks for). Needed
 # because a SQL query fails if it names a column no file has yet — e.g. right
 # after a detector change, before any new-format file has been written.
 @ttl_cache(300)
 def weather_columns():
-    return {row["column_name"] for row in query(f"DESCRIBE SELECT * FROM {WEATHER}")}
+    return {row["column_name"] for row in query(f"DESCRIBE SELECT * FROM {lake('weather', 168)}")}
 
 
 # SQL for one edge of the "normal range" band ('-' = lower, '+' = upper), for
@@ -284,9 +322,9 @@ def health():
     rows = query(f"""
         SELECT 'weather' AS dataset,
                strftime(max(observed_at), '%Y-%m-%dT%H:%M:%SZ') AS latest
-        FROM {WEATHER}
+        FROM {lake('weather', 48)}
         UNION ALL
         SELECT 'seismic', strftime(max(ingested_at), '%Y-%m-%dT%H:%M:%SZ')
-        FROM {SEISMIC}
+        FROM {lake('seismic', 48)}
     """)
     return {row["dataset"]: row["latest"] for row in rows}

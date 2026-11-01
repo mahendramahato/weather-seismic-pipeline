@@ -4,6 +4,9 @@ services:
     build: ./api
     container_name: api
     restart: unless-stopped
+    # Hard ceiling: if the API ever balloons again, only this container is
+    # killed and restarted, instead of the whole VM running out of memory.
+    mem_limit: 2g
     environment:
       # Where the lake is inside this container (mounted below).
       LAKE_DIR: /opt/data/lake
