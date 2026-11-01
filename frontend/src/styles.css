@@ -561,6 +561,7 @@ button {
 .lg-normal { background: var(--normal); }
 .lg-anomaly { background: var(--anomaly); }
 .lg-unscored { background: var(--unscored); }
+.lg-nws { background: color-mix(in srgb, #8f6bd6 45%, transparent); border: 1.5px solid #8f6bd6; border-radius: 3px !important; }
 
 /* Station markers on the globe (created by EarthGlobe.jsx): a glowing dot;
    the name + temperature label shows on hover and while selected. */
@@ -901,6 +902,88 @@ button {
 
 .alert-when {
   white-space: nowrap;
+}
+
+/* ---------- NWS warnings ---------- */
+.severity-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.severity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sev) 14%, transparent);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.severity-chip i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sev);
+}
+
+.nws-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.nws-list li {
+  display: grid;
+  grid-template-columns: 4px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid var(--panel-border);
+}
+
+.nws-list li:first-child {
+  border-top: 0;
+}
+
+.nws-bar {
+  align-self: stretch;
+  border-radius: 2px;
+  background: var(--sev);
+}
+
+.nws-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.nws-event {
+  font-weight: 600;
+}
+
+.nws-area,
+.nws-until {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.nws-area {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nws-until {
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.show-all {
+  margin-top: 10px;
 }
 
 /* ---------- Stations ---------- */

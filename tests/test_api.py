@@ -63,6 +63,31 @@ def client(tmp_path_factory):
         ],
     )
 
+    write_table(
+        lake / "alerts",
+        [
+            "alert_id VARCHAR", "sent_at TIMESTAMP", "expires_at TIMESTAMP", "event VARCHAR",
+            "severity VARCHAR", "urgency VARCHAR", "certainty VARCHAR", "headline VARCHAR",
+            "area VARCHAR", "message_type VARCHAR", "replaces VARCHAR[]", "lat DOUBLE",
+            "lon DOUBLE", "geometry VARCHAR", "ingested_at TIMESTAMP",
+        ],
+        [
+            # Active severe warning with a polygon.
+            ("a1", NOW - timedelta(hours=2), NOW + timedelta(hours=4), "Tornado Warning", "Severe",
+             "Immediate", "Observed", "Tornado Warning for Ada County", "Ada, ID", "Alert", [], 43.6, -116.2,
+             '{"type":"Polygon","coordinates":[[[-116,43],[-116.5,43],[-116.5,44],[-116,43]]]}', NOW),
+            # a2 was updated by a3, so only a3 should show.
+            ("a2", NOW - timedelta(hours=3), NOW + timedelta(hours=6), "Flood Watch", "Moderate",
+             "Expected", "Possible", "Flood Watch", "King, WA", "Alert", [], None, None, None, NOW),
+            ("a3", NOW - timedelta(hours=1), NOW + timedelta(hours=6), "Flood Watch", "Moderate",
+             "Expected", "Possible", "Flood Watch extended", "King, WA", "Update", ["a2"], None, None,
+             '{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}', NOW),
+            # Already expired.
+            ("a4", NOW - timedelta(hours=5), NOW - timedelta(hours=1), "Wind Advisory", "Minor",
+             "Expected", "Likely", "Wind Advisory", "Denver, CO", "Alert", [], None, None, None, NOW),
+        ],
+    )
+
     os.environ["LAKE_DIR"] = str(lake)
     os.environ.setdefault("AWS_DEFAULT_REGION", "us-west-2")
     sys.path.insert(0, str(API_DIR))
@@ -118,7 +143,7 @@ def test_pipeline_reports_stream_and_curated_status(client, monkeypatch):
     # No AWS in tests: pretend Athena is unreachable.
     monkeypatch.setattr(main, "curated_freshness", lambda: None)
     body = client.get("/api/pipeline").json()
-    assert set(body["streams"]) == {"weather", "seismic"}
+    assert set(body["streams"]) == {"weather", "seismic", "alerts"}
     # The test lake was written moments ago, so both streams look fresh.
     assert body["streams"]["weather"]["status"] == "healthy"
     assert body["streams"]["seismic"]["age_minutes"] < 15
@@ -133,3 +158,11 @@ def test_curated_status_compares_against_expected_day():
     assert main.curated_status(tables, "2026-11-01") == "delayed"
     assert main.curated_status(tables, "2026-11-05") == "down"
     assert main.curated_status(None, "2026-11-01") == "unknown"
+
+
+def test_nws_alerts_show_only_alerts_still_in_force(client):
+    alerts = client.get("/api/nws-alerts").json()
+    assert [a["alert_id"] for a in alerts] == ["a1", "a3"]  # severe first; a2 replaced, a4 expired
+    # Polygons only for Extreme/Severe alerts.
+    assert alerts[0]["geometry"] is not None
+    assert alerts[1]["geometry"] is None

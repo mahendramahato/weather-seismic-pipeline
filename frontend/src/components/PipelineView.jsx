@@ -71,6 +71,8 @@ export default function PipelineView() {
   }
 
   const { weather, seismic } = data.streams
+  // Older API versions don't report the alerts stream yet.
+  const alerts = data.streams.alerts ?? { status: 'unknown', age_minutes: null, files_today: 0 }
   const streaming = worst(weather.status, seismic.status)
   const batch = data.curated.status
   const overall = worst(streaming, batch)
@@ -78,6 +80,7 @@ export default function PipelineView() {
   const curatedDays = Object.values(tables).filter(Boolean).map((d) => String(d).slice(0, 10))
   const curatedThrough = curatedDays.length ? curatedDays.sort()[0] : null
   const ages = [weather.age_minutes, seismic.age_minutes].filter((a) => a !== null)
+  const filesToday = weather.files_today + seismic.files_today + alerts.files_today
   const freshest = ages.length ? Math.min(...ages) : null
   const { memory_mb: memory, memory_limit_mb: limit } = data.api
 
@@ -104,9 +107,10 @@ export default function PipelineView() {
         </div>
         <div className="stat">
           <span className="stat-label">Files written today</span>
-          <span className="stat-value">{(weather.files_today + seismic.files_today).toLocaleString()}</span>
+          <span className="stat-value">{filesToday.toLocaleString()}</span>
           <span className="stat-sub">
-            {weather.files_today.toLocaleString()} weather · {seismic.files_today.toLocaleString()} seismic
+            {weather.files_today.toLocaleString()} weather · {seismic.files_today.toLocaleString()} seismic ·{' '}
+            {alerts.files_today.toLocaleString()} alerts
           </span>
         </div>
         <div className="stat">
@@ -123,25 +127,27 @@ export default function PipelineView() {
         </div>
         <div className="flow-row">
           <Stage name="Sources" status={streaming}>
-            NOAA weather.gov and the USGS earthquake feed
+            NOAA weather.gov, NWS alerts and the USGS earthquake feed
           </Stage>
           <Connector />
           <Stage name="Producer" status={streaming}>
-            Polls both feeds every minute
+            Polls all three feeds every minute
           </Stage>
           <Connector />
           <Stage name="Kafka" status={streaming}>
-            Topics <code>weather</code> and <code>seismic</code>
+            Topics <code>weather</code>, <code>seismic</code> and <code>alerts</code>
           </Stage>
           <Connector />
-          <Stage name="Spark Streaming" status={streaming}>
+          <Stage name="Spark Streaming" status={worst(streaming, alerts.status)}>
             weather-stream: last file {ageText(weather.age_minutes)} ago
             <br />
             seismic-stream: last file {ageText(seismic.age_minutes)} ago
+            <br />
+            alerts-stream: last file {ageText(alerts.age_minutes)} ago
           </Stage>
           <Connector />
           <Stage name="Parquet lake" status={streaming}>
-            Daily partitions · {(weather.files_today + seismic.files_today).toLocaleString()} files today
+            Daily partitions · {filesToday.toLocaleString()} files today
           </Stage>
           <Connector />
           <Stage name="API" status="healthy">

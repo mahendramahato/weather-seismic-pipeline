@@ -1,11 +1,13 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import AlertsFeed from './components/AlertsFeed.jsx'
+import NwsAlerts from './components/NwsAlerts.jsx'
 import PipelineView from './components/PipelineView.jsx'
 import QuakeDetail from './components/QuakeDetail.jsx'
 import StationList from './components/StationList.jsx'
 import StatsGrid from './components/StatsGrid.jsx'
 import TimeScrubber from './components/TimeScrubber.jsx'
 import { getJson, timeAgo } from './lib/format.js'
+import { alertPolygons } from './lib/nws.js'
 import { largest, latestSignificant, magnitudeColor } from './lib/quakes.js'
 import { useDayTheme } from './lib/useDayTheme.js'
 import { useHashView } from './lib/useHashView.js'
@@ -62,7 +64,7 @@ export default function App() {
   const view = useHashView()
 
   // Stations, sparkline history and freshness: refreshed every minute.
-  const [live, setLive] = useState({ stations: [], history: [], health: {}, fetchedAt: null })
+  const [live, setLive] = useState({ stations: [], history: [], health: {}, nws: [], fetchedAt: null })
   // Quakes for the chosen window (24 h or 7 days), with when they were fetched.
   const [windowKey, setWindowKey] = useState('day')
   const [quakeData, setQuakeData] = useState({ quakes: [], fetchedAt: null })
@@ -77,12 +79,15 @@ export default function App() {
   useEffect(() => {
     async function load() {
       try {
-        const [stations, history, health] = await Promise.all([
+        const [stations, history, health, nws] = await Promise.all([
           getJson('/api/stations'),
           getJson('/api/weather/history?hours=24'),
           getJson('/api/health'),
+          // NWS warnings are a bonus layer: if that call fails, show none
+          // rather than failing the whole page.
+          getJson('/api/nws-alerts').catch(() => []),
         ])
-        setLive({ stations, history, health, fetchedAt: Date.now() })
+        setLive({ stations, history, health, nws, fetchedAt: Date.now() })
         setError(null)
       } catch (err) {
         setError(err.message)
@@ -134,6 +139,9 @@ export default function App() {
     live.history.forEach((row) => (groups[row.station_id] ??= []).push(row))
     return groups
   }, [live.history])
+
+  // Severe/Extreme NWS warnings with a drawn area, for the globe.
+  const nwsPolygons = useMemo(() => alertPolygons(live.nws), [live.nws])
 
   const { quakes } = quakeData
   // While replaying, only quakes up to the replay time are shown.
@@ -200,6 +208,7 @@ export default function App() {
                 <EarthGlobe
                   stations={live.stations}
                   quakes={visibleQuakes}
+                  nwsPolygons={nwsPolygons}
                   selectedStationId={selectedStationId}
                   selectedQuakeId={selectedQuakeId}
                   onSelectStation={setSelectedStationId}
@@ -235,6 +244,7 @@ export default function App() {
                 <span><i className="lg-normal" /> Normal</span>
                 <span><i className="lg-anomaly" /> Anomaly</span>
                 <span><i className="lg-unscored" /> Calibrating</span>
+                <span><i className="lg-nws" /> NWS warning area</span>
               </div>
             </div>
 
@@ -255,6 +265,7 @@ export default function App() {
               onClose={selectedQuake ? () => setSelectedQuakeId(null) : null}
             />
             <AlertsFeed />
+            <NwsAlerts alerts={live.nws} />
             <footer className="credits">Data: NOAA weather.gov &amp; USGS · Imagery: NASA</footer>
           </aside>
         </main>

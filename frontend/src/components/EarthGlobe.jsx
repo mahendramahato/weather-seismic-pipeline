@@ -3,6 +3,7 @@ import Globe from 'react-globe.gl'
 import * as THREE from 'three'
 import { escapeHtml, timeAgo } from '../lib/format.js'
 import { STATION_NAMES } from '../lib/stations.js'
+import { severityColor } from '../lib/nws.js'
 import { magnitudeColor, withAlpha } from '../lib/quakes.js'
 import { subsolarPoint } from '../lib/sun.js'
 
@@ -76,6 +77,7 @@ function rippleQuakes(quakes, selectedQuakeId) {
 export default function EarthGlobe({
   stations,
   quakes,
+  nwsPolygons = [],
   selectedStationId,
   selectedQuakeId,
   onSelectStation,
@@ -211,6 +213,17 @@ export default function EarthGlobe({
           ringMaxRadius={(q) => Math.max(q.magnitude, 1) * 1.4}
           ringPropagationSpeed={(q) => 1 + Math.max(q.magnitude, 1) * 0.35}
           ringRepeatPeriod={(q) => 700 + Math.max(q.magnitude, 1) * 260}
+          // NWS Severe/Extreme warning areas: translucent violet shapes
+          // lying just above the surface, with the warning on hover.
+          polygonsData={nwsPolygons}
+          polygonGeoJsonGeometry="geometry"
+          polygonCapColor={(a) => withAlpha(severityColor(a.severity), 0.35)}
+          polygonSideColor={(a) => withAlpha(severityColor(a.severity), 0.15)}
+          polygonStrokeColor={(a) => severityColor(a.severity)}
+          polygonAltitude={0.004}
+          polygonLabel={(a) =>
+            `<div class="globe-tip"><b>${escapeHtml(a.event)}</b><br/>${escapeHtml(a.area)}</div>`
+          }
           // Stations: clickable dots with hover labels.
           htmlElementsData={stations}
           htmlLat="lat"

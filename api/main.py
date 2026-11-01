@@ -289,14 +289,21 @@ def curated_alerts(first_day, last_day):
 # each stream wrote a file to the lake, how far the curated (Athena) tables
 # reach, and this process's own memory. Stage health on the page is inferred
 # from these, not read from Kafka or Airflow directly.
-STREAM_HEALTHY_MIN = 15    # a Spark micro-batch writes every minute or so
-STREAM_DELAYED_MIN = 120   # past this, treat the stream as down
+# Minutes since the newest file before a stream counts as delayed / down.
+# Weather and seismic write almost every minute; NWS alerts only when NWS
+# issues something new, which can pause for a while on a quiet night.
+STREAM_LIMITS = {
+    "weather": (15, 120),
+    "seismic": (15, 120),
+    "alerts": (90, 360),
+}
 
 
-def stream_status(age_minutes):
-    if age_minutes is None or age_minutes > STREAM_DELAYED_MIN:
+def stream_status(age_minutes, dataset="weather"):
+    healthy_min, delayed_min = STREAM_LIMITS[dataset]
+    if age_minutes is None or age_minutes > delayed_min:
         return "down"
-    if age_minutes > STREAM_HEALTHY_MIN:
+    if age_minutes > healthy_min:
         return "delayed"
     return "healthy"
 
@@ -321,7 +328,7 @@ def stream_freshness(dataset):
         else datetime.fromtimestamp(newest, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "age_minutes": age,
         "files_today": len(today_files),
-        "status": stream_status(age),
+        "status": stream_status(age, dataset),
     }
 
 
@@ -371,6 +378,38 @@ def api_memory():
     return {"memory_mb": used_mb, "memory_limit_mb": limit_mb}
 
 
+# --- NWS alerts (DuckDB over the alerts lake, cached 60 s) ---
+# Alerts still in force: not expired, not a cancellation, and not replaced by
+# a newer alert (an NWS update is a new alert listing the ids it replaces).
+# Polygons are sent only for Extreme/Severe alerts, which the globe draws;
+# the rest are listed by area name, which keeps the response small.
+SEVERITY_ORDER = "CASE severity WHEN 'Extreme' THEN 0 WHEN 'Severe' THEN 1 WHEN 'Moderate' THEN 2 WHEN 'Minor' THEN 3 ELSE 4 END"
+
+
+@ttl_cache(60)
+def active_nws_alerts():
+    # No alerts lake yet (stream not started): nothing to show, not an error.
+    if not glob.glob(f"{LAKE_DIR}/alerts/date=*/*.parquet"):
+        return []
+    # Long-running warnings (floods, fire weather) can be issued days before;
+    # a week of partitions covers them.
+    source = lake("alerts", 168)
+    return query(f"""
+        WITH alerts AS (SELECT * FROM {source}),
+        replaced AS (SELECT DISTINCT unnest(replaces) AS alert_id FROM alerts)
+        SELECT alert_id, event, severity, urgency, certainty, headline, area, lat, lon,
+               strftime(sent_at, '%Y-%m-%dT%H:%M:%SZ') AS sent_at,
+               strftime(expires_at, '%Y-%m-%dT%H:%M:%SZ') AS expires_at,
+               CASE WHEN severity IN ('Extreme', 'Severe') THEN geometry END AS geometry
+        FROM alerts
+        WHERE coalesce(expires_at, sent_at + INTERVAL 1 DAY) > ?
+          AND message_type <> 'Cancel'
+          AND alert_id NOT IN (SELECT alert_id FROM replaced WHERE alert_id IS NOT NULL)
+        QUALIFY row_number() OVER (PARTITION BY alert_id ORDER BY ingested_at DESC) = 1
+        ORDER BY {SEVERITY_ORDER}, sent_at DESC
+    """, [hours_ago(0)])
+
+
 # --- Endpoints ---
 @app.get("/api/stations")
 def stations():
@@ -385,6 +424,11 @@ def quakes(hours: int = Query(24, ge=1, le=168)):
 @app.get("/api/weather/history")
 def weather_history(hours: int = Query(24, ge=1, le=168)):
     return live_weather_history(hours)
+
+
+@app.get("/api/nws-alerts")
+def nws_alerts():
+    return active_nws_alerts()
 
 
 @app.get("/api/alerts")
@@ -415,7 +459,7 @@ def pipeline():
     tables = curated_freshness()
     return {
         "checked_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "streams": {name: stream_freshness(name) for name in ("weather", "seismic")},
+        "streams": {name: stream_freshness(name) for name in STREAM_LIMITS},
         "curated": {
             "tables": tables,
             "expected": expected,

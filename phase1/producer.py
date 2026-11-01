@@ -13,6 +13,7 @@ from confluent_kafka import Producer
 BOOTSTRAP_SERVERS = os.environ.get("BOOTSTRAP_SERVERS", "localhost:9094")
 WEATHER_TOPIC = "weather"
 SEISMIC_TOPIC = "seismic"
+ALERTS_TOPIC = "alerts"
 
 # NOAA requires a User-Agent identifying the app and a contact.
 NOAA_HEADERS = {"User-Agent": "weather-seismic-pipeline (mahendramahato33@gmail.com)"}
@@ -26,6 +27,8 @@ STATIONS = [
 ]
 POLL_INTERVAL_SECONDS = 60  # seconds
 USGS_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson"
+# Every active NWS alert (warnings, watches, advisories) across the US.
+NWS_ALERTS_URL = "https://api.weather.gov/alerts/active"
 
 
 # Current time in UTC as an ISO string — used for the ingested_at field.
@@ -79,6 +82,55 @@ def fetch_earthquakes() -> list[dict]:
                 "lat": lat,
                 "lon": lon,
                 "depth_km": depth_km,
+                "ingested_at": utc_now_iso(),
+            }
+        )
+    return records
+
+
+# Rough centre of an alert's polygon, for placing it on the globe.
+# GeoJSON polygons are [[[lon, lat], ...]] (outer ring first); averaging the
+# ring's points is close enough for a marker. Many alerts have no polygon
+# (they cover named counties/zones instead), so this returns (None, None).
+def polygon_centre(geometry) -> tuple:
+    if not geometry or geometry.get("type") != "Polygon":
+        return None, None
+    ring = geometry["coordinates"][0]
+    lon = sum(p[0] for p in ring) / len(ring)
+    lat = sum(p[1] for p in ring) / len(ring)
+    return lat, lon
+
+
+# Calls NWS for every active alert in the US and flattens each one into a
+# small record. Alerts are never edited in place: an update is a NEW alert
+# with a new id that lists the ids it replaces, so the id alone identifies
+# a version.
+def fetch_nws_alerts() -> list[dict]:
+    response = requests.get(NWS_ALERTS_URL, headers=NOAA_HEADERS, timeout=15)
+    response.raise_for_status()
+    records = []
+    for feature in response.json()["features"]:
+        props = feature["properties"]
+        geometry = feature.get("geometry")
+        lat, lon = polygon_centre(geometry)
+        records.append(
+            {
+                "alert_id": props["id"],
+                "event": props["event"],              # e.g. "Winter Storm Warning"
+                "severity": props["severity"],        # Extreme / Severe / Moderate / Minor / Unknown
+                "urgency": props["urgency"],          # Immediate / Expected / Future ...
+                "certainty": props["certainty"],      # Observed / Likely / Possible ...
+                "headline": props.get("headline"),
+                "area": props["areaDesc"],            # human-readable places it covers
+                "sent_at": props["sent"],             # event time: when NWS issued it
+                "expires_at": props.get("ends") or props.get("expires"),
+                "message_type": props["messageType"], # Alert / Update / Cancel
+                # Earlier alerts this one updates or cancels; the API hides those.
+                "replaces": [ref["identifier"] for ref in props.get("references") or []],
+                "lat": lat,
+                "lon": lon,
+                # Full polygon as a string, so the dashboard can draw the area.
+                "geometry": json.dumps(geometry) if geometry else None,
                 "ingested_at": utc_now_iso(),
             }
         )
@@ -152,6 +204,28 @@ def poll_seismic(producer: Producer, last_quakes: dict[str, str]) -> dict[str, s
     print(f"{utc_now_iso()}  seismic: sent {sent} new ({len(quakes)} in feed)")
     return current
 
+# Sends only alerts we haven't sent before. Returns a fresh set of the ids
+# in the current feed, so expired alerts are forgotten and memory stays small.
+def poll_alerts(producer: Producer, last_alerts: set[str]) -> set[str]:
+    try:
+        alerts = fetch_nws_alerts()
+    except requests.RequestException as exc:
+        print(f"SKIP    alerts: {exc}")
+        # Keep the old set; returning an empty one would resend everything.
+        return last_alerts
+
+    current = set()
+    sent = 0
+    for alert in alerts:
+        current.add(alert["alert_id"])
+        if alert["alert_id"] in last_alerts:
+            continue
+        send(producer, ALERTS_TOPIC, alert["alert_id"], alert)
+        sent += 1
+    print(f"{utc_now_iso()}  alerts: sent {sent} new ({len(alerts)} active)")
+    return current
+
+
 # `docker stop` sends SIGTERM, not Ctrl+C. Python would exit immediately and 
 # skip the finally block -- losing queued messages. Raising KeyboardInterrupt 
 # sends SIGTERM down the same clean-shutdown path as CTRL+C
@@ -160,7 +234,7 @@ def handle_sigterm(signum, frame):
 
 
 # --- Main loop ---
-# Polls both sources every POLL_INTERVAL_SECONDS until Ctrl+C.
+# Polls all three sources every POLL_INTERVAL_SECONDS until Ctrl+C.
 def main():
     signal.signal(signal.SIGTERM, handle_sigterm)
     producer = Producer({"bootstrap.servers": BOOTSTRAP_SERVERS})
@@ -168,12 +242,14 @@ def main():
     # (at-least-once delivery).
     last_weather: dict[str, str] = {}
     last_quakes: dict[str, str] = {}
+    last_alerts: set[str] = set()
 
     print(f"polling every {POLL_INTERVAL_SECONDS} seconds... - Ctrl+C to stop")
     try:
         while True:
             poll_weather(producer, last_weather)
             last_quakes = poll_seismic(producer, last_quakes)
+            last_alerts = poll_alerts(producer, last_alerts)
             # Runs pending delivery callbacks without waiting.
             producer.poll(0)
             time.sleep(POLL_INTERVAL_SECONDS)
